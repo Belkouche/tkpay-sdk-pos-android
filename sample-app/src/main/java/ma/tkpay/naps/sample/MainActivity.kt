@@ -1,45 +1,81 @@
 package ma.tkpay.naps.sample
 
 import android.os.Bundle
+import android.view.View
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.launch
 import ma.tkpay.naps.NapsPayClient
+import ma.tkpay.naps.app2app.App2AppClient
+import ma.tkpay.naps.app2app.App2AppResult
 import ma.tkpay.naps.config.NapsConfig
 import ma.tkpay.naps.models.NapsError
 import ma.tkpay.naps.models.PaymentRequest
 import ma.tkpay.naps.sample.databinding.ActivityMainBinding
 
 /**
- * Sample app demonstrating NAPS Pay SDK usage
+ * Sample app demonstrating both integration modes of the NAPS Pay SDK:
+ *
+ * MODE 1 — TCP/M2M (NapsPayClient):
+ *   Direct socket connection to NAPS Pay on port 4444.
+ *   Best for custom terminals or when NAPS Pay is on a different device.
+ *
+ * MODE 2 — App2App (App2AppClient):
+ *   Launches NAPS Pay via Android Intent. NAPS Pay handles the card interaction
+ *   and returns the result to this app.
+ *   - printReceipt = true  → NAPS Pay prints, SDK returns transaction data only.
+ *   - printReceipt = false → NAPS Pay does NOT print. SDK builds and returns
+ *     merchant + customer receipts. Developer decides: print via Sunmi, store,
+ *     email, etc.
+ *   Best for Sunmi POS devices where both apps run side-by-side.
  */
 class MainActivity : AppCompatActivity() {
 
     private lateinit var binding: ActivityMainBinding
-    private var napsClient: NapsPayClient? = null
+
+    // TCP mode client (created per-payment)
+    private var tcpClient: NapsPayClient? = null
+
+    // App2App client — must be registered in onCreate()
+    private lateinit var app2AppClient: App2AppClient
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
 
+        // Register App2App client — MUST be in onCreate before activity starts
+        app2AppClient = App2AppClient.register(
+            activity = this,
+            onResult = { result -> handleApp2AppResult(result) }
+        )
+
         setupListeners()
+        updateModeVisibility()
     }
 
     private fun setupListeners() {
-        binding.testConnectionButton.setOnClickListener {
-            testConnection()
-        }
+        binding.modeTcpRadio.setOnClickListener { updateModeVisibility() }
+        binding.modeApp2AppRadio.setOnClickListener { updateModeVisibility() }
 
-        binding.processPaymentButton.setOnClickListener {
-            processPayment()
-        }
+        binding.testConnectionButton.setOnClickListener { testTcpConnection() }
+        binding.processPaymentButton.setOnClickListener { processPayment() }
     }
 
-    private fun testConnection() {
-        val host = binding.hostEditText.text.toString()
+    private fun updateModeVisibility() {
+        val isTcp = binding.modeTcpRadio.isChecked
+        binding.hostLayout.visibility = if (isTcp) View.VISIBLE else View.GONE
+        binding.testConnectionButton.visibility = if (isTcp) View.VISIBLE else View.GONE
+        binding.printReceiptLayout.visibility = if (isTcp) View.GONE else View.VISIBLE
+    }
 
+    // -------------------------------------------------------------------------
+    // TCP Mode
+    // -------------------------------------------------------------------------
+
+    private fun testTcpConnection() {
+        val host = binding.hostEditText.text.toString()
         if (host.isBlank()) {
             Toast.makeText(this, "Please enter terminal IP", Toast.LENGTH_SHORT).show()
             return
@@ -51,24 +87,16 @@ class MainActivity : AppCompatActivity() {
                 binding.testConnectionButton.isEnabled = false
 
                 val config = NapsConfig(host = host)
-                napsClient = NapsPayClient(config)
+                tcpClient = NapsPayClient(config)
+                val connected = tcpClient!!.testConnection()
 
-                val connected = napsClient!!.testConnection()
-
-                if (connected) {
-                    binding.resultTextView.text = "✅ Connection successful!\n\nReady to process payments."
-                    Toast.makeText(this@MainActivity, "Connected!", Toast.LENGTH_SHORT).show()
+                binding.resultTextView.text = if (connected) {
+                    "✅ Connection successful!\nReady to process payments."
                 } else {
-                    binding.resultTextView.text = "❌ Connection failed\n\nPlease check:\n" +
-                            "- Terminal IP address\n" +
-                            "- Terminal is on and connected to network\n" +
-                            "- NAPS Pay app is running on terminal"
+                    "❌ Connection failed\n\nCheck:\n- Terminal IP\n- Terminal on same network\n- NAPS Pay app running"
                 }
-
-            } catch (e: NapsError) {
-                binding.resultTextView.text = "❌ Error: ${e.message}\n\n${e.code}"
             } catch (e: Exception) {
-                binding.resultTextView.text = "❌ Unexpected error: ${e.message}"
+                binding.resultTextView.text = "❌ Error: ${e.message}"
             } finally {
                 binding.testConnectionButton.isEnabled = true
             }
@@ -76,150 +104,166 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun processPayment() {
-        val host = binding.hostEditText.text.toString()
         val amountStr = binding.amountEditText.text.toString()
-
-        if (host.isBlank()) {
-            Toast.makeText(this, "Please enter terminal IP", Toast.LENGTH_SHORT).show()
-            return
-        }
-
-        if (amountStr.isBlank()) {
-            Toast.makeText(this, "Please enter amount", Toast.LENGTH_SHORT).show()
-            return
-        }
-
         val amount = amountStr.toDoubleOrNull()
+
         if (amount == null || amount <= 0) {
             Toast.makeText(this, "Invalid amount", Toast.LENGTH_SHORT).show()
             return
         }
 
+        if (binding.modeTcpRadio.isChecked) {
+            processTcpPayment(amount)
+        } else {
+            processApp2AppPayment(amount)
+        }
+    }
+
+    private fun processTcpPayment(amount: Double) {
+        val host = binding.hostEditText.text.toString()
+        if (host.isBlank()) {
+            Toast.makeText(this, "Please enter terminal IP", Toast.LENGTH_SHORT).show()
+            return
+        }
+
         lifecycleScope.launch {
             try {
-                binding.resultTextView.text = "Processing payment of $amount MAD...\n" +
-                        "Please tap card on terminal.\n"
+                binding.resultTextView.text = "Processing $amount MAD via TCP...\nPlease tap card on terminal.\n"
                 binding.processPaymentButton.isEnabled = false
 
-                // Create config and client
                 val config = NapsConfig(host = host)
                 val client = NapsPayClient(config)
-
-                // Create payment request
-                val request = PaymentRequest(
-                    amount = amount,
-                    registerId = "01",
-                    cashierId = "00001"
+                val result = client.processPayment(
+                    PaymentRequest(amount = amount, registerId = "01", cashierId = "00001")
                 )
 
-                // Process payment
-                val result = client.processPayment(request)
-
-                // Display result
                 if (result.isApproved()) {
-                    displaySuccessResult(result)
+                    displayTcpSuccess(result)
                     Toast.makeText(this@MainActivity, "Payment Approved!", Toast.LENGTH_LONG).show()
                 } else {
-                    displayFailedResult(result)
+                    binding.resultTextView.text = "❌ PAYMENT FAILED\nCode: ${result.responseCode}\n${result.error}"
                     Toast.makeText(this@MainActivity, "Payment Failed", Toast.LENGTH_LONG).show()
                 }
-
             } catch (e: NapsError) {
-                binding.resultTextView.text = buildString {
-                    append("❌ Payment Error\n\n")
-                    append("Code: ${e.code}\n")
-                    append("Message: ${e.message}\n\n")
-
-                    when (e.code) {
-                        ma.tkpay.naps.models.ErrorCode.CONNECTION_FAILED -> {
-                            append("Troubleshooting:\n")
-                            append("- Check terminal IP address\n")
-                            append("- Ensure terminal is on same network\n")
-                            append("- Verify NAPS Pay app is running\n")
-                        }
-                        ma.tkpay.naps.models.ErrorCode.TIMEOUT -> {
-                            append("Troubleshooting:\n")
-                            append("- Ensure card was tapped on terminal\n")
-                            append("- Check terminal is responding\n")
-                        }
-                        else -> {}
-                    }
-                }
-                Toast.makeText(this@MainActivity, e.message, Toast.LENGTH_LONG).show()
+                binding.resultTextView.text = "❌ NapsError: ${e.message}\nCode: ${e.code}"
             } catch (e: Exception) {
-                binding.resultTextView.text = "❌ Unexpected error: ${e.message}\n\n${e.stackTraceToString()}"
+                binding.resultTextView.text = "❌ Error: ${e.message}"
             } finally {
                 binding.processPaymentButton.isEnabled = true
             }
         }
     }
 
-    private fun displaySuccessResult(result: ma.tkpay.naps.models.PaymentResult) {
-        binding.resultTextView.text = buildString {
-            append("✅ PAYMENT APPROVED\n\n")
-            append("═══════════════════════════\n\n")
+    // -------------------------------------------------------------------------
+    // App2App Mode
+    // -------------------------------------------------------------------------
 
-            append("Transaction Details:\n")
-            append("─────────────────\n")
+    private fun processApp2AppPayment(amountMad: Double) {
+        if (!app2AppClient.isNapsPayInstalled()) {
+            binding.resultTextView.text = "❌ NAPS Pay not installed on this device.\n\nInstall com.m2mgroup.napspay first."
+            return
+        }
+
+        val amountCentimes = (amountMad * 100).toLong()
+        val printReceipt = binding.printReceiptSwitch.isChecked
+        val orderId = System.currentTimeMillis().toString().takeLast(8).padStart(8, '0')
+
+        binding.resultTextView.text = buildString {
+            append("Launching NAPS Pay...\n\n")
+            append("Amount: $amountMad MAD\n")
+            append("Order ID: $orderId\n")
+            append("Print receipt: $printReceipt\n\n")
+            if (!printReceipt) append("📄 SDK will build merchant + customer receipts.\n")
+        }
+        binding.processPaymentButton.isEnabled = false
+
+        // Launch NAPS Pay — result delivered to handleApp2AppResult()
+        app2AppClient.pay(
+            orderId = orderId,
+            amountCentimes = amountCentimes,
+            printReceipt = printReceipt
+        )
+    }
+
+    /**
+     * Called by App2AppClient when NAPS Pay returns a result.
+     * Runs on the main thread.
+     */
+    private fun handleApp2AppResult(result: App2AppResult) {
+        binding.processPaymentButton.isEnabled = true
+
+        if (result.isApproved()) {
+            displayApp2AppSuccess(result)
+            Toast.makeText(this, "Payment Approved!", Toast.LENGTH_LONG).show()
+        } else if (result.isCancelled) {
+            binding.resultTextView.text = "⚠️ CANCELLED\n\nUser cancelled the payment in NAPS Pay."
+            Toast.makeText(this, "Cancelled", Toast.LENGTH_SHORT).show()
+        } else {
+            binding.resultTextView.text = buildString {
+                append("❌ PAYMENT FAILED\n\n")
+                append("Code: ${result.responseCode}\n")
+                result.responseMessage?.let { append("Message: $it\n") }
+                append("Error: ${result.errorType.defaultMessage}\n")
+            }
+            Toast.makeText(this, "Payment Failed", Toast.LENGTH_LONG).show()
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Display helpers
+    // -------------------------------------------------------------------------
+
+    private fun displayTcpSuccess(result: ma.tkpay.naps.models.PaymentResult) {
+        binding.resultTextView.text = buildString {
+            append("✅ PAYMENT APPROVED (TCP)\n\n")
             append("STAN: ${result.stan}\n")
             append("Auth: ${result.authNumber}\n")
-            append("Response: ${result.responseCode}\n\n")
-
-            append("Card Details:\n")
-            append("─────────────────\n")
             append("Card: ${result.getFormattedCardNumber()}\n")
             append("Expiry: ${result.getFormattedExpiry()}\n")
-            result.cardholderName?.let { append("Name: $it\n") }
             result.entryMode?.let { append("Entry: $it\n") }
-            append("\n")
-
-            append("Transaction Info:\n")
-            append("─────────────────\n")
             result.transactionDate?.let { append("Date: $it\n") }
             result.transactionTime?.let { append("Time: $it\n") }
-            result.sequence?.let { append("Seq: $it\n") }
             append("\n")
-
-            // Display merchant receipt
-            result.merchantReceipt?.let { receipt ->
-                append("═══════════════════════════\n")
-                append("MERCHANT RECEIPT\n")
-                append("═══════════════════════════\n\n")
-                append(receipt.toPlainText())
-                append("\n\n")
+            result.merchantReceipt?.let {
+                append("─── MERCHANT RECEIPT ───\n${it.toPlainText()}\n\n")
             }
-
-            // Display customer receipt
-            result.customerReceipt?.let { receipt ->
-                append("═══════════════════════════\n")
-                append("CUSTOMER RECEIPT\n")
-                append("═══════════════════════════\n\n")
-                append(receipt.toPlainText())
-                append("\n")
+            result.customerReceipt?.let {
+                append("─── CUSTOMER RECEIPT ───\n${it.toPlainText()}\n")
             }
         }
     }
 
-    private fun displayFailedResult(result: ma.tkpay.naps.models.PaymentResult) {
+    private fun displayApp2AppSuccess(result: App2AppResult) {
         binding.resultTextView.text = buildString {
-            append("❌ PAYMENT FAILED\n\n")
-            append("═══════════════════════════\n\n")
+            append("✅ PAYMENT APPROVED (App2App)\n\n")
+            append("STAN: ${result.stan}\n")
+            append("RRN: ${result.rrn}\n")
+            append("Approval: ${result.approvalCode}\n")
+            append("Receipt #: ${result.receiptNumber}\n")
+            append("Card: ${result.getFormattedCardNumber()}\n")
+            result.cardScheme?.let { append("Scheme: $it\n") }
+            result.terminalId?.let { append("Terminal: $it\n") }
+            result.merchantName?.let { append("Merchant: $it\n") }
+            result.transactionDate?.let { append("Date: $it\n") }
+            result.transactionTime?.let { append("Time: $it\n") }
 
-            append("Error Details:\n")
-            append("─────────────────\n")
-            append("Code: ${result.responseCode}\n")
-            append("Message: ${result.error ?: "Unknown error"}\n\n")
+            if (result.merchantReceipt != null || result.customerReceipt != null) {
+                append("\n📄 Receipts built by SDK (printReceipt=false)\n")
+                append("Developer can print, store, or email these.\n\n")
 
-            result.stan?.let {
-                append("STAN: $it\n\n")
-            }
-
-            when (result.responseCode) {
-                "909" -> append("Terminal or server is down.\nPlease check the terminal status.\n")
-                "302" -> append("Transaction not found.\nPlease try again.\n")
-                "482" -> append("Transaction already cancelled.\n")
-                "480" -> append("Transaction was cancelled.\n")
-                else -> append("Please try again or contact support.\n")
+                result.merchantReceipt?.let {
+                    append("─── MERCHANT RECEIPT ───\n")
+                    append(it.toPlainText())
+                    append("\n\n")
+                    // Example: to print via Sunmi printer, pass it.lines to SunmiPrinterService
+                }
+                result.customerReceipt?.let {
+                    append("─── CUSTOMER RECEIPT ───\n")
+                    append(it.toPlainText())
+                    append("\n")
+                }
+            } else {
+                append("\n(Receipts printed by NAPS Pay)")
             }
         }
     }
