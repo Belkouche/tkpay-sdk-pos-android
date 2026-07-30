@@ -60,6 +60,18 @@ object TlvProtocol {
         const val PAYMENT_RESPONSE = "101"
         const val CONFIRMATION_REQUEST = "002"
         const val CONFIRMATION_RESPONSE = "102"
+        const val CANCELLATION_REQUEST = "003"
+        const val CANCELLATION_RESPONSE = "103"
+        const val DUPLICATE_REQUEST = "008"
+        const val DUPLICATE_RESPONSE = "108"
+        const val NETWORK_TEST_REQUEST = "009"
+        const val NETWORK_TEST_RESPONSE = "109"
+        const val SETTLEMENT_REQUEST = "010"
+        const val SETTLEMENT_RESPONSE = "110"
+        const val RESET_REQUEST = "012"
+        const val RESET_RESPONSE = "112"
+        const val REFERENCING_REQUEST = "013"
+        const val REFERENCING_RESPONSE = "113"
     }
 
     /**
@@ -110,6 +122,85 @@ object TlvProtocol {
                buildField(Tags.HE, dateTime.time) +
                buildField(Tags.DATR, dateTime.date) +
                buildField(Tags.HETR, dateTime.time)
+    }
+
+    /**
+     * Build cancellation request TLV (TM=003)
+     */
+    fun buildCancellationRequest(
+        stan: String,
+        ncai: String,
+        sequence: String
+    ): String {
+        val dateTime = getCurrentDateTime()
+
+        return buildField(Tags.TM, MessageTypes.CANCELLATION_REQUEST) +
+               buildField(Tags.STAN, stan) +
+               buildField(Tags.NCAI, ncai) +
+               buildField(Tags.NSA, sequence) +
+               buildField(Tags.DA, dateTime.date) +
+               buildField(Tags.HE, dateTime.time)
+    }
+
+    /**
+     * Build duplicate receipt request TLV (TM=008)
+     */
+    fun buildDuplicateRequest(ncai: String, stan: String? = null): String {
+        val dateTime = getCurrentDateTime()
+
+        return buildField(Tags.TM, MessageTypes.DUPLICATE_REQUEST) +
+               buildField(Tags.NCAI, ncai) +
+               buildField(Tags.DA, dateTime.date) +
+               buildField(Tags.HE, dateTime.time) +
+               (if (stan != null) buildField(Tags.STAN, stan) else "")
+    }
+
+    /**
+     * Build network test request TLV (TM=009)
+     */
+    fun buildNetworkTestRequest(ncai: String): String {
+        val dateTime = getCurrentDateTime()
+
+        return buildField(Tags.TM, MessageTypes.NETWORK_TEST_REQUEST) +
+               buildField(Tags.NCAI, ncai) +
+               buildField(Tags.DA, dateTime.date) +
+               buildField(Tags.HE, dateTime.time)
+    }
+
+    /**
+     * Build reset PinPAD request TLV (TM=012)
+     */
+    fun buildResetRequest(ncai: String): String {
+        val dateTime = getCurrentDateTime()
+
+        return buildField(Tags.TM, MessageTypes.RESET_REQUEST) +
+               buildField(Tags.NCAI, ncai) +
+               buildField(Tags.DA, dateTime.date) +
+               buildField(Tags.HE, dateTime.time)
+    }
+
+    /**
+     * Build referencing request TLV (TM=013)
+     */
+    fun buildReferencingRequest(ncai: String): String {
+        val dateTime = getCurrentDateTime()
+
+        return buildField(Tags.TM, MessageTypes.REFERENCING_REQUEST) +
+               buildField(Tags.NCAI, ncai) +
+               buildField(Tags.DA, dateTime.date) +
+               buildField(Tags.HE, dateTime.time)
+    }
+
+    /**
+     * Build settlement request TLV (TM=010 — telecollecte)
+     */
+    fun buildSettlementRequest(ncai: String): String {
+        val dateTime = getCurrentDateTime()
+
+        return buildField(Tags.TM, MessageTypes.SETTLEMENT_REQUEST) +
+               buildField(Tags.NCAI, ncai) +
+               buildField(Tags.DA, dateTime.date) +
+               buildField(Tags.HE, dateTime.time)
     }
 
     /**
