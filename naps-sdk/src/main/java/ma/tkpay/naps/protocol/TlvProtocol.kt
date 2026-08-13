@@ -126,20 +126,26 @@ object TlvProtocol {
 
     /**
      * Build cancellation request TLV (TM=003)
+     *
+     * NapsPay v5.4.4+ requires the original amount (TAG 002) in the frame.
+     * Pass [amountCentimes] when targeting v5.4.4+.
      */
     fun buildCancellationRequest(
         stan: String,
         ncai: String,
-        sequence: String
+        sequence: String,
+        amountCentimes: Long? = null
     ): String {
         val dateTime = getCurrentDateTime()
 
-        return buildField(Tags.TM, MessageTypes.CANCELLATION_REQUEST) +
-               buildField(Tags.STAN, stan) +
+        var msg = buildField(Tags.TM, MessageTypes.CANCELLATION_REQUEST)
+        if (amountCentimes != null) msg += buildField(Tags.MT, amountCentimes.toString())
+        msg += buildField(Tags.STAN, stan) +
                buildField(Tags.NCAI, ncai) +
                buildField(Tags.NSA, sequence) +
                buildField(Tags.DA, dateTime.date) +
                buildField(Tags.HE, dateTime.time)
+        return msg
     }
 
     /**

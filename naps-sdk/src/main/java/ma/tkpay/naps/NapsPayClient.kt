@@ -320,32 +320,39 @@ class NapsPayClient(private val config: NapsConfig) {
      * Can only cancel the last approved transaction. Send the STAN
      * returned by processPayment() and the original sequence number.
      *
+     * NapsPay v5.4.4+ requires [amountCentimes] (TAG 002) in the frame and
+     * may respond with MT=104 (correction) in addition to MT=103. Both are success.
+     *
      * @param stan STAN of the transaction to cancel
      * @param registerId Register ID (2 digits)
      * @param cashierId Cashier ID (5 digits)
      * @param sequence Sequence number of the original transaction
+     * @param amountCentimes Original amount in centimes (required for v5.4.4+)
      */
     suspend fun cancelPayment(
         stan: String,
         registerId: String,
         cashierId: String,
-        sequence: String
+        sequence: String,
+        amountCentimes: Long? = null
     ): CancellationResult = withContext(Dispatchers.IO) {
         val ncai = registerId + cashierId
         val connection = NapsConnection(config)
 
         try {
             connection.connect()
-            val tlvRequest = TlvProtocol.buildCancellationRequest(stan, ncai, sequence)
+            val tlvRequest = TlvProtocol.buildCancellationRequest(stan, ncai, sequence, amountCentimes)
             val tlvResponse = connection.sendAndReceive(tlvRequest)
             val fields = TlvProtocol.parse(tlvResponse)
             val responseCode = fields[TlvProtocol.Tags.CR] ?: ""
+            val mt = fields[TlvProtocol.Tags.TM] ?: ""
+            val success = (mt == "103" || mt == "104") && responseCode == "000"
 
             CancellationResult(
-                success = responseCode == "000",
+                success = success,
                 responseCode = responseCode,
                 stan = fields[TlvProtocol.Tags.STAN],
-                error = if (responseCode != "000") "Cancellation failed with code: $responseCode" else null
+                error = if (!success) "Cancellation failed with code: $responseCode" else null
             )
         } catch (e: Exception) {
             CancellationResult(success = false, responseCode = "", error = e.message)
