@@ -62,6 +62,8 @@ object TlvProtocol {
         const val CONFIRMATION_RESPONSE = "102"
         const val CANCELLATION_REQUEST = "003"
         const val CANCELLATION_RESPONSE = "103"
+        const val CANCELLATION_CONFIRMATION_REQUEST = "004"
+        const val CANCELLATION_CORRECTION = "104"
         const val DUPLICATE_REQUEST = "008"
         const val DUPLICATE_RESPONSE = "108"
         const val NETWORK_TEST_REQUEST = "009"
@@ -80,6 +82,123 @@ object TlvProtocol {
     object Currency {
         const val MAD = "504"  // Moroccan Dirham
     }
+
+    /**
+     * End-of-message terminators. NAPS TLV v2 terminates frames with '!';
+     * v1 terminates with '?'. Both are recognised so the parser and read
+     * loop are protocol-version agnostic.
+     */
+    const val TERMINATOR_V2 = '!'
+    const val TERMINATOR_V1 = '?'
+
+    /**
+     * CR (013) response codes that mean the transaction was approved.
+     * 000 always means success; 001/003/007 are also approvals.
+     */
+    val APPROVED_CODES = setOf("000", "001", "003", "007")
+
+    /**
+     * CR (013) response codes from the NAPS TLV v2 spec §6. Code 000 always
+     * means success; 001/003/007 are also approvals. All others describe a
+     * specific condition.
+     */
+    val RESPONSE_CODES: Map<String, String> = mapOf(
+        "000" to "Approved",
+        "001" to "Approved with identification",
+        "003" to "Approved (VIP)",
+        "007" to "Approved, microchip update required",
+        "100" to "Do not honour",
+        "101" to "Card expired",
+        "102" to "Fraud suspected",
+        "104" to "Restricted card use",
+        "106" to "Allowed PIN tries exceeded",
+        "107" to "Refer to card issuer",
+        "108" to "Refer to issuer special conditions",
+        "109" to "Invalid merchant",
+        "110" to "Invalid amount",
+        "111" to "Invalid card number",
+        "112" to "PIN information required",
+        "114" to "No account of requested type",
+        "115" to "Requested function not supported",
+        "116" to "Insufficient funds",
+        "117" to "Incorrect PIN",
+        "118" to "Card not registered",
+        "119" to "Transaction not permitted to cardholder",
+        "120" to "Transaction not permitted at terminal",
+        "121" to "Withdrawal limit exceeded",
+        "122" to "Security violation",
+        "123" to "Withdrawal frequency exceeded",
+        "125" to "Card not in service",
+        "126" to "Invalid PIN format",
+        "127" to "PIN length error",
+        "128" to "PIN key sync error",
+        "129" to "Card counterfeiting suspected",
+        "180" to "Credit account does not exist",
+        "181" to "Cheque account does not exist",
+        "182" to "Savings account does not exist",
+        "183" to "Invalid CVV",
+        "184" to "Invalid date",
+        "200" to "Do not honour — capture card",
+        "201" to "Card expired — capture card",
+        "202" to "Fraud suspected — capture card",
+        "204" to "Restricted card — capture card",
+        "205" to "Security service — capture card",
+        "206" to "PIN tries exceeded — capture card",
+        "207" to "Special conditions — capture card",
+        "208" to "Lost card — capture card",
+        "209" to "Stolen card — capture card",
+        "210" to "Counterfeiting suspected — capture card",
+        "280" to "Alternative amount cancelled",
+        "299" to "Capture card",
+        "300" to "Processing completed",
+        "301" to "Not supported by recipient",
+        "302" to "Record not found on file",
+        "303" to "Duplicate record, old record replaced",
+        "304" to "Field edit error",
+        "305" to "File locked",
+        "306" to "Processing failure",
+        "307" to "Format error",
+        "308" to "Duplicate processing, new record rejected",
+        "309" to "File unknown",
+        "381" to "Record not found. Account unsettled. Withdrawal not processed",
+        "382" to "Balance record deleted",
+        "383" to "Balance enquiry",
+        "480" to "Reversal accepted",
+        "481" to "Reversal incorrect",
+        "482" to "Transaction already cancelled",
+        "501" to "Reversal amount incorrect",
+        "503" to "Totals not available",
+        "581" to "Reconciliation complete",
+        "582" to "Reconciliation procedure not available",
+        "700" to "Top-ups fully reserved",
+        "701" to "Top-ups partially reserved",
+        "702" to "Top-ups not reserved",
+        "750" to "Message or ECR request not authorised by centre",
+        "800" to "Cut-off in progress",
+        "880" to "Connection not accepted",
+        "902" to "Invalid transaction",
+        "908" to "Transaction recipient not referenced for routing",
+        "909" to "System failure",
+        "911" to "Issuer did not respond in time",
+        "912" to "Card issuer unavailable",
+        "992" to "Issuer not found",
+        "993" to "PIN verification impossible",
+        "994" to "Transaction processing error",
+        "995" to "Server processing error"
+    )
+
+    /**
+     * Human-readable description of a CR code, or a fallback string if unknown.
+     */
+    fun describeResponse(cr: String?): String =
+        cr?.let { RESPONSE_CODES[it] } ?: run {
+            "Unknown response code: ${cr ?: "(none)"}"
+        }
+
+    /**
+     * Whether a CR code denotes an approved transaction.
+     */
+    fun isApproved(cr: String?): Boolean = cr != null && cr in APPROVED_CODES
 
     /**
      * Receipt Sub-tags (within DP/010)
@@ -149,6 +268,31 @@ object TlvProtocol {
     }
 
     /**
+     * Build cancellation confirmation request TLV (TM=004)
+     *
+     * Sent on the same connection after receiving MT=103 from TM=003.
+     * [amount] must echo the amount (TAG 002, 12-digit) from the MT=103
+     * response — omitting it is refused with CR=909 on NapsPay v5.4.4+.
+     */
+    fun buildCancellationConfirmation(
+        stan: String,
+        ncai: String,
+        sequence: String,
+        amount: String? = null
+    ): String {
+        val dateTime = getCurrentDateTime()
+
+        var msg = buildField(Tags.TM, MessageTypes.CANCELLATION_CONFIRMATION_REQUEST)
+        if (amount != null) msg += buildField(Tags.MT, amount)
+        msg += buildField(Tags.STAN, stan) +
+               buildField(Tags.NCAI, ncai) +
+               buildField(Tags.NS, sequence) +
+               buildField(Tags.DA, dateTime.date) +
+               buildField(Tags.HE, dateTime.time)
+        return msg
+    }
+
+    /**
      * Build duplicate receipt request TLV (TM=008)
      */
     fun buildDuplicateRequest(ncai: String, stan: String? = null): String {
@@ -210,33 +354,63 @@ object TlvProtocol {
     }
 
     /**
-     * Build confirmation request TLV
+     * Build payment confirmation request TLV (TM=002)
      *
-     * Sends current date/time as DA (014) and HE (015),
-     * plus transaction date/time as DATR (018) and HETR (019).
+     * Per NAPS TLV v2 §4.2 the confirmation may carry, in addition to
+     * TM/NCAI/NS/STAN/DA/HE, coherence fields echoed from the approved
+     * Payment Response (TM=101):
+     * - [amountCentimes] → MT (002) + DE (012) currency (default "504")
+     * - [ncar]           → NCAR (007), the masked PAN
+     * - [daex]           → DAEX (017), the card expiry (YYMM)
+     *
+     * Optional fields are omitted when null/blank, keeping older callers working.
+     * Field order mirrors the reference: TM, NCAI, NS, [MT, DE], STAN, [NCAR],
+     * [DAEX], DA, HE, DATR, HETR.
      */
     fun buildConfirmationRequest(
         stan: String,
         ncai: String,
-        sequence: String
+        sequence: String,
+        amountCentimes: Long? = null,
+        currency: String = Currency.MAD,
+        ncar: String? = null,
+        daex: String? = null
     ): String {
         val dateTime = getCurrentDateTime()
 
-        return buildField(Tags.TM, MessageTypes.CONFIRMATION_REQUEST) +
-               buildField(Tags.STAN, stan) +
-               buildField(Tags.NCAI, ncai) +
-               buildField(Tags.NS, sequence) +
-               buildField(Tags.DA, dateTime.date) +
+        var msg = buildField(Tags.TM, MessageTypes.CONFIRMATION_REQUEST) +
+                  buildField(Tags.NCAI, ncai) +
+                  buildField(Tags.NS, sequence)
+
+        if (amountCentimes != null) {
+            msg += buildField(Tags.MT, amountCentimes.toString()) +
+                   buildField(Tags.DE, currency)
+        }
+
+        msg += buildField(Tags.STAN, stan)
+
+        if (!ncar.isNullOrEmpty()) msg += buildField(Tags.NCAR, ncar)
+        if (!daex.isNullOrEmpty()) msg += buildField(Tags.DAEX, daex)
+
+        msg += buildField(Tags.DA, dateTime.date) +
                buildField(Tags.HE, dateTime.time) +
                buildField(Tags.DATR, dateTime.date) +
                buildField(Tags.HETR, dateTime.time)
+
+        return msg
     }
 
     /**
      * Parse TLV string into fields map
      */
-    fun parse(tlvString: String): Map<String, String> {
+    fun parse(rawTlvString: String): Map<String, String> {
         val fields = mutableMapOf<String, String>()
+
+        // Stop at the first end-of-message terminator ('!' v2, '?' v1) so any
+        // receipt content or noise after it is ignored. Both are accepted so the
+        // parser is protocol-version agnostic.
+        val termIndex = rawTlvString.indexOfFirst { it == TERMINATOR_V2 || it == TERMINATOR_V1 }
+        val tlvString = if (termIndex >= 0) rawTlvString.substring(0, termIndex) else rawTlvString
         var index = 0
 
         while (index < tlvString.length) {

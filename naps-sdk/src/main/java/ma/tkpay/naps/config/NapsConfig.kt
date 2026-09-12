@@ -1,18 +1,32 @@
 package ma.tkpay.naps.config
 
 /**
+ * NAPS TLV protocol version. Selects the expected end-of-message terminator:
+ * v2 frames end with '!', v1 frames end with '?'. These SDKs are TCP/Sunmi
+ * only, so the default is [V2].
+ */
+enum class ProtocolVersion(val terminator: Char) {
+    V1('?'),
+    V2('!')
+}
+
+/**
  * Configuration for NAPS Pay M2M connection
  *
  * @property host IP address of NAPS Pay terminal
  * @property port TCP port for M2M communication (default: 4444)
  * @property timeout Connection timeout in milliseconds (default: 120000ms = 2 minutes)
  * @property confirmationTimeout Timeout for payment confirmation (default: 40000ms = 40 seconds)
+ * @property protocolVersion NAPS TLV protocol version (default: v2). Selects the
+ *   expected response terminator ('!' = v2, '?' = v1). The read loop still
+ *   tolerates the other terminator; this only chooses the primary one.
  */
 data class NapsConfig(
     val host: String,
     val port: Int = DEFAULT_PORT,
     val timeout: Long = DEFAULT_TIMEOUT,
-    val confirmationTimeout: Long = CONFIRMATION_TIMEOUT
+    val confirmationTimeout: Long = CONFIRMATION_TIMEOUT,
+    val protocolVersion: ProtocolVersion = ProtocolVersion.V2
 ) {
     companion object {
         const val DEFAULT_PORT = 4444

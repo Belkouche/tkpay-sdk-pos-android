@@ -3,6 +3,12 @@
 Android SDK for integrating NAPS Pay terminals into your point-of-sale application  
 via a direct **TCP/M2M socket connection** on port 4444.
 
+> **NAPS TLV v2 (default since 1.2.1).** The payment confirmation (TM=002) now
+> echoes the amount (MT + DE), masked PAN (NCAR) and card expiry (DAEX) from the
+> approved payment response for the terminal's coherence checks. Frames are
+> terminated with `'!'` (v2); the reader still tolerates the v1 `'?'` terminator.
+> Set `protocolVersion = ProtocolVersion.V1` on `NapsConfig` to prefer v1.
+
 ---
 
 ## Table of Contents
@@ -387,25 +393,36 @@ Receipt format: **58 mm / 32 characters wide**.
 
 ## Response codes
 
+The CR (013) response code is mapped to a human-readable message by
+`TlvProtocol.describeResponse(code)`. `TlvProtocol.isApproved(code)` returns
+`true` for the approved set `{000, 001, 003, 007}`. Common codes (full table in
+`TlvProtocol.RESPONSE_CODES`, per NAPS TLV v2 §6):
+
 | Code | Meaning |
 |---|---|
 | `000` | Approved |
-| `001` | Refer to card issuer |
-| `005` | Do not honour |
-| `012` | Invalid transaction |
-| `013` | Invalid amount |
-| `051` | Insufficient funds |
-| `055` | Invalid PIN |
-| `057` | Transaction not permitted to cardholder |
-| `061` | Exceeds withdrawal amount limit |
-| `065` | Exceeds withdrawal frequency limit |
-| `075` | PIN tries exceeded |
-| `091` | Issuer or switch inoperative |
-| `096` | System malfunction |
-| `302` | Transaction not found |
-| `480` | Transaction cancelled |
+| `001` | Approved with identification |
+| `003` | Approved (VIP) |
+| `007` | Approved, microchip update required |
+| `100` | Do not honour |
+| `101` | Card expired |
+| `102` | Fraud suspected |
+| `106` | Allowed PIN tries exceeded |
+| `116` | Insufficient funds |
+| `117` | Incorrect PIN |
+| `118` | Card not registered |
+| `120` | Transaction not permitted at terminal |
+| `121` | Withdrawal limit exceeded |
+| `183` | Invalid CVV |
+| `280` | Alternative amount cancelled |
+| `302` | Record not found on file |
+| `307` | Format error |
+| `480` | Reversal accepted |
 | `482` | Transaction already cancelled |
-| `909` | Terminal or server down |
+| `909` | System failure |
+| `911` | Issuer did not respond in time |
+| `912` | Card issuer unavailable |
+| `995` | Server processing error |
 
 ---
 
@@ -432,6 +449,7 @@ All methods are `suspend` — call from a coroutine scope (e.g. `lifecycleScope.
 | `port` | `4444` | NAPS M2M TCP port |
 | `timeout` | `120_000` ms | Payment timeout (2 min for customer to tap) |
 | `confirmationTimeout` | `40_000` ms | Phase 2 hard deadline (NAPS protocol limit) |
+| `protocolVersion` | `ProtocolVersion.V2` | NAPS TLV version. Selects the expected response terminator (`'!'` = v2, `'?'` = v1); the read loop tolerates both. |
 
 ---
 

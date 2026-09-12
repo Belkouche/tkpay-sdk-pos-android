@@ -144,10 +144,20 @@ class NapsPayClient(private val config: NapsConfig) {
         val sequence = request.sequence ?: paymentResponse[TlvProtocol.Tags.NS]
             ?: throw NapsError.invalidResponse("Missing sequence")
 
+        // Thread the coherence fields from the approved Payment Response (TM=101)
+        // into the confirmation (TM=002) per NAPS TLV v2 §4.2. MT/DE come from
+        // the request amount; NCAR/DAEX are echoed from the response when present.
+        val amountCentimes = (request.amount * 100).toLong()
+        val ncar = paymentResponse[TlvProtocol.Tags.NCAR]
+        val daex = paymentResponse[TlvProtocol.Tags.DAEX]
+
         val tlvConfirm = TlvProtocol.buildConfirmationRequest(
             stan = stan,
             ncai = request.getNcai(),
-            sequence = sequence
+            sequence = sequence,
+            amountCentimes = amountCentimes,
+            ncar = ncar,
+            daex = daex
         )
 
         val tlvResponse = connection.sendAndReceive(
@@ -201,13 +211,7 @@ class NapsPayClient(private val config: NapsConfig) {
         responseCode: String,
         fields: Map<String, String>
     ): PaymentResult {
-        val errorMessage = when (responseCode) {
-            "909" -> "Terminal or server is down"
-            "302" -> "Transaction not found"
-            "482" -> "Transaction already cancelled"
-            "480" -> "Transaction cancelled"
-            else -> "Payment declined with code: $responseCode"
-        }
+        val errorMessage = TlvProtocol.describeResponse(responseCode)
 
         return PaymentResult(
             success = false,
@@ -315,13 +319,13 @@ class NapsPayClient(private val config: NapsConfig) {
     }
 
     /**
-     * Cancel (void) a previous transaction (TM=003)
+     * Cancel (void) a previous transaction — two-phase flow (TM=003 → TM=004)
      *
-     * Can only cancel the last approved transaction. Send the STAN
-     * returned by processPayment() and the original sequence number.
-     *
-     * NapsPay v5.4.4+ requires [amountCentimes] (TAG 002) in the frame and
-     * may respond with MT=104 (correction) in addition to MT=103. Both are success.
+     * NapsPay v5.4.4+ requires [amountCentimes] (TAG 002) in the TM=003 frame.
+     * Flow on a single TCP connection:
+     *   1. Send TM=003 → terminal replies MT=103 (CR=000 = accepted)
+     *   2. Send TM=004 echoing the amount from MT=103 → terminal replies
+     *      MT=104 with the final result (CR=000/995 = success)
      *
      * @param stan STAN of the transaction to cancel
      * @param registerId Register ID (2 digits)
@@ -341,18 +345,51 @@ class NapsPayClient(private val config: NapsConfig) {
 
         try {
             connection.connect()
+
+            // Phase 1: TM=003 → MT=103
             val tlvRequest = TlvProtocol.buildCancellationRequest(stan, ncai, sequence, amountCentimes)
             val tlvResponse = connection.sendAndReceive(tlvRequest)
             val fields = TlvProtocol.parse(tlvResponse)
             val responseCode = fields[TlvProtocol.Tags.CR] ?: ""
             val mt = fields[TlvProtocol.Tags.TM] ?: ""
-            val success = (mt == "103" || mt == "104") && responseCode == "000"
+
+            // MT=104 direct means already finalised (single-phase firmware)
+            if (mt == TlvProtocol.MessageTypes.CANCELLATION_CORRECTION) {
+                return@withContext CancellationResult(
+                    success = responseCode == "000",
+                    responseCode = responseCode,
+                    stan = fields[TlvProtocol.Tags.STAN],
+                    error = if (responseCode != "000") "Cancellation failed with code: $responseCode" else null
+                )
+            }
+
+            if (mt != TlvProtocol.MessageTypes.CANCELLATION_RESPONSE || responseCode != "000") {
+                return@withContext CancellationResult(
+                    success = false,
+                    responseCode = responseCode,
+                    stan = fields[TlvProtocol.Tags.STAN],
+                    error = "Cancellation failed with code: $responseCode"
+                )
+            }
+
+            // Phase 2: TM=004 on the same connection, echoing the amount from MT=103
+            val confirmRequest = TlvProtocol.buildCancellationConfirmation(
+                fields[TlvProtocol.Tags.STAN] ?: stan,
+                ncai,
+                sequence,
+                fields[TlvProtocol.Tags.MT]
+            )
+            val confirmResponse = connection.sendAndReceive(confirmRequest, timeout = config.confirmationTimeout)
+            val fields2 = TlvProtocol.parse(confirmResponse)
+            val cr2 = fields2[TlvProtocol.Tags.CR] ?: ""
+            // CR=000 = confirmed, CR=995 = host processing (also success)
+            val success2 = cr2 == "000" || cr2 == "995"
 
             CancellationResult(
-                success = success,
-                responseCode = responseCode,
-                stan = fields[TlvProtocol.Tags.STAN],
-                error = if (!success) "Cancellation failed with code: $responseCode" else null
+                success = success2,
+                responseCode = cr2,
+                stan = fields2[TlvProtocol.Tags.STAN] ?: fields[TlvProtocol.Tags.STAN],
+                error = if (!success2) "Cancellation failed with code: $cr2" else null
             )
         } catch (e: Exception) {
             CancellationResult(success = false, responseCode = "", error = e.message)

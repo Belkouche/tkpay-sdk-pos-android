@@ -87,8 +87,9 @@ class NapsConnection(private val config: NapsConfig) {
     /**
      * Receive message from socket
      *
-     * Reads data until no more data is available for 1 second
-     * (NAPS Pay terminal keeps connection open after sending response)
+     * Stops as soon as a NAPS end-of-message terminator is seen ('!' for v2,
+     * '?' for v1); otherwise reads until no more data is available for 1 second
+     * (NAPS Pay terminal keeps connection open after sending response).
      */
     private suspend fun receiveMessage(): String = withContext(Dispatchers.IO) {
         val response = StringBuilder()
@@ -106,6 +107,9 @@ class NapsConnection(private val config: NapsConfig) {
                     if (count == 0) break   // No data
 
                     response.append(buffer, 0, count)
+
+                    // Stop immediately once the frame terminator arrives.
+                    if (endsFrame(response)) break
 
                     // If less than buffer size, we likely have all data
                     if (count < buffer.size) {
@@ -137,6 +141,20 @@ class NapsConnection(private val config: NapsConfig) {
         }
 
         response.toString()
+    }
+
+    /**
+     * True once the accumulated response carries a NAPS end-of-message
+     * terminator: '!' (v2) or '?' (v1). Both are recognised regardless of the
+     * configured [NapsConfig.protocolVersion] so a terminal that answers with
+     * the other version's terminator is still handled.
+     */
+    private fun endsFrame(response: StringBuilder): Boolean {
+        for (i in response.indices) {
+            val c = response[i]
+            if (c == '!' || c == '?') return true
+        }
+        return false
     }
 
     /**
