@@ -1,9 +1,14 @@
 package ma.tkpay.naps
 
+import android.content.Context
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import ma.tkpay.naps.config.NapsConfig
+import ma.tkpay.naps.config.TransportType
 import ma.tkpay.naps.connection.NapsConnection
+import ma.tkpay.naps.connection.NapsTransport
+import ma.tkpay.naps.connection.UsbSerialConnection
+import ma.tkpay.naps.connection.use
 import ma.tkpay.naps.gateway.GatewayNotifier
 import ma.tkpay.naps.models.CancellationResult
 import ma.tkpay.naps.models.DuplicateReceiptResult
@@ -49,9 +54,32 @@ import java.util.concurrent.atomic.AtomicInteger
  * }
  * ```
  */
-class NapsPayClient(private val config: NapsConfig) {
+class NapsPayClient(
+    private val config: NapsConfig,
+    private val context: Context? = null
+) {
 
     private val sequenceGenerator = AtomicInteger(1)
+
+    /**
+     * Build the transport for this client's [config].
+     *
+     * TCP is the default. For [TransportType.USB_SERIAL] a non-null [context] is
+     * required (the USB stack needs it), so construct the client with a Context.
+     */
+    private fun newTransport(): NapsTransport = when (config.transport) {
+        TransportType.TCP_SOCKET -> NapsConnection(config)
+        TransportType.USB_SERIAL -> {
+            val ctx = context
+                ?: throw NapsError.connectionFailed(
+                    IllegalStateException("USB serial transport requires a Context: use NapsPayClient(config, context)")
+                )
+            UsbSerialConnection(ctx, config)
+        }
+    }
+
+    /** Best-effort label for gateway notifications: TCP host or serial device name. */
+    private fun terminalLabel(): String = config.host ?: config.serialPortName ?: "usb-serial"
 
     /**
      * Process a payment transaction
@@ -65,7 +93,7 @@ class NapsPayClient(private val config: NapsConfig) {
      * @throws NapsError if payment fails
      */
     suspend fun processPayment(request: PaymentRequest): PaymentResult = withContext(Dispatchers.IO) {
-        val connection = NapsConnection(config)
+        val connection = newTransport()
 
         try {
             connection.connect()
@@ -81,7 +109,7 @@ class NapsPayClient(private val config: NapsConfig) {
                 val result = buildFailedResult(responseCode, paymentResponse)
                 // Send notification to gateway
                 GatewayNotifier.notifyTransaction(
-                    terminalHost = config.host,
+                    terminalHost = terminalLabel(),
                     request = request,
                     result = result
                 )
@@ -100,7 +128,7 @@ class NapsPayClient(private val config: NapsConfig) {
 
             // Send notification to gateway
             GatewayNotifier.notifyTransaction(
-                terminalHost = config.host,
+                terminalHost = terminalLabel(),
                 request = request,
                 result = result
             )
@@ -115,7 +143,7 @@ class NapsPayClient(private val config: NapsConfig) {
      * Send payment request (Phase 1)
      */
     private suspend fun sendPaymentRequest(
-        connection: NapsConnection,
+        connection: NapsTransport,
         request: PaymentRequest
     ): Map<String, String> {
         val sequence = request.sequence ?: generateSequence()
@@ -126,7 +154,7 @@ class NapsPayClient(private val config: NapsConfig) {
             sequence = sequence
         )
 
-        val tlvResponse = connection.sendAndReceive(tlvRequest)
+        val tlvResponse = connection.sendAndReceive(tlvRequest, timeout = config.timeout)
         return TlvProtocol.parse(tlvResponse)
     }
 
@@ -134,7 +162,7 @@ class NapsPayClient(private val config: NapsConfig) {
      * Send confirmation (Phase 2)
      */
     private suspend fun sendConfirmation(
-        connection: NapsConnection,
+        connection: NapsTransport,
         request: PaymentRequest,
         paymentResponse: Map<String, String>
     ): Map<String, String> {
@@ -244,12 +272,12 @@ class NapsPayClient(private val config: NapsConfig) {
      */
     suspend fun settlement(registerId: String, cashierId: String): SettlementResult = withContext(Dispatchers.IO) {
         val ncai = registerId + cashierId
-        val connection = NapsConnection(config)
+        val connection = newTransport()
 
         try {
             connection.connect()
             val tlvRequest = TlvProtocol.buildSettlementRequest(ncai)
-            val tlvResponse = connection.sendAndReceive(tlvRequest)
+            val tlvResponse = connection.sendAndReceive(tlvRequest, timeout = config.timeout)
             val fields = TlvProtocol.parse(tlvResponse)
 
             val responseCode = fields[TlvProtocol.Tags.CR] ?: ""
@@ -274,7 +302,7 @@ class NapsPayClient(private val config: NapsConfig) {
      */
     suspend fun testConnection(): Boolean = withContext(Dispatchers.IO) {
         return@withContext try {
-            val connection = NapsConnection(config)
+            val connection = newTransport()
             connection.use {
                 connection.isConnected
             }
@@ -295,7 +323,7 @@ class NapsPayClient(private val config: NapsConfig) {
      */
     suspend fun networkTest(registerId: String, cashierId: String): NetworkTestResult = withContext(Dispatchers.IO) {
         val ncai = registerId + cashierId
-        val connection = NapsConnection(config)
+        val connection = newTransport()
         val startMs = System.currentTimeMillis()
 
         try {
@@ -341,14 +369,14 @@ class NapsPayClient(private val config: NapsConfig) {
         amountCentimes: Long? = null
     ): CancellationResult = withContext(Dispatchers.IO) {
         val ncai = registerId + cashierId
-        val connection = NapsConnection(config)
+        val connection = newTransport()
 
         try {
             connection.connect()
 
             // Phase 1: TM=003 → MT=103
             val tlvRequest = TlvProtocol.buildCancellationRequest(stan, ncai, sequence, amountCentimes)
-            val tlvResponse = connection.sendAndReceive(tlvRequest)
+            val tlvResponse = connection.sendAndReceive(tlvRequest, timeout = config.timeout)
             val fields = TlvProtocol.parse(tlvResponse)
             val responseCode = fields[TlvProtocol.Tags.CR] ?: ""
             val mt = fields[TlvProtocol.Tags.TM] ?: ""
@@ -414,12 +442,12 @@ class NapsPayClient(private val config: NapsConfig) {
         stan: String? = null
     ): DuplicateReceiptResult = withContext(Dispatchers.IO) {
         val ncai = registerId + cashierId
-        val connection = NapsConnection(config)
+        val connection = newTransport()
 
         try {
             connection.connect()
             val tlvRequest = TlvProtocol.buildDuplicateRequest(ncai, stan)
-            val tlvResponse = connection.sendAndReceive(tlvRequest)
+            val tlvResponse = connection.sendAndReceive(tlvRequest, timeout = config.timeout)
             val fields = TlvProtocol.parse(tlvResponse)
             val responseCode = fields[TlvProtocol.Tags.CR] ?: ""
             val merchantReceipt = fields[TlvProtocol.Tags.DP]?.let {
@@ -450,7 +478,7 @@ class NapsPayClient(private val config: NapsConfig) {
      */
     suspend fun resetPinPad(registerId: String, cashierId: String): ResetResult = withContext(Dispatchers.IO) {
         val ncai = registerId + cashierId
-        val connection = NapsConnection(config)
+        val connection = newTransport()
 
         try {
             connection.connect()
@@ -482,12 +510,12 @@ class NapsPayClient(private val config: NapsConfig) {
      */
     suspend fun referencing(registerId: String, cashierId: String): ReferencingResult = withContext(Dispatchers.IO) {
         val ncai = registerId + cashierId
-        val connection = NapsConnection(config)
+        val connection = newTransport()
 
         try {
             connection.connect()
             val tlvRequest = TlvProtocol.buildReferencingRequest(ncai)
-            val tlvResponse = connection.sendAndReceive(tlvRequest)
+            val tlvResponse = connection.sendAndReceive(tlvRequest, timeout = config.timeout)
             val fields = TlvProtocol.parse(tlvResponse)
             val responseCode = fields[TlvProtocol.Tags.CR] ?: ""
             val receipt = fields[TlvProtocol.Tags.DP]?.let {

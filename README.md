@@ -1,7 +1,15 @@
 # TKpay NAPS POS SDK — Android (Kotlin)
 
 Android SDK for integrating NAPS Pay terminals into your point-of-sale application  
-via a direct **TCP/M2M socket connection** on port 4444.
+via either a **TCP/M2M socket** (Sunmi P2/P3, port 4444 — the default) or **USB serial**
+(Ingenico Lane/3000, CDC-ACM over USB-host mode).
+
+> **USB serial transport (new in 1.3.0).** Set `transport = TransportType.USB_SERIAL`
+> to drive an Ingenico Lane/3000 over USB. It uses Android **USB-host mode** and
+> requires a granted **runtime USB permission**; it cannot run against a TCP
+> emulator. This path is unit-tested at the discovery/config layer only — it has
+> **not** been verified on physical USB-host hardware. See
+> [USB serial (Ingenico Lane/3000)](#usb-serial-ingenico-lane3000).
 
 > **NAPS TLV v2 (default since 1.2.1).** The payment confirmation (TM=002) now
 > echoes the amount (MT + DE), masked PAN (NCAR) and card expiry (DAEX) from the
@@ -125,6 +133,62 @@ dependencies {
 <uses-permission android:name="android.permission.INTERNET" />
 <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
 ```
+
+For the USB serial transport, also declare USB-host support (already merged from the
+SDK's manifest, listed here for completeness):
+
+```xml
+<uses-feature android:name="android.hardware.usb.host" android:required="false" />
+```
+
+---
+
+## USB serial (Ingenico Lane/3000)
+
+> **Not device-verified.** The serial transport is implemented against Android
+> **USB-host mode** using [`usb-serial-for-android`](https://github.com/mik3y/usb-serial-for-android)
+> and the platform `UsbManager`. It requires USB-host hardware and a runtime USB
+> permission grant, so it **cannot** be validated against the TCP emulator. Only the
+> pure logic (device discovery + per-transport protocol default) is covered by unit
+> tests; the on-device serial I/O has not been run on real hardware.
+
+Select the transport on `NapsConfig` and pass a `Context` to the client (the USB
+stack needs it):
+
+```kotlin
+import android.content.Context
+import ma.tkpay.naps.NapsPayClient
+import ma.tkpay.naps.config.NapsConfig
+import ma.tkpay.naps.config.TransportType
+
+// Auto-discover the Ingenico device by USB vendor id 0x0B00 (2816);
+// falls back to the first CDC-ACM device if no vendor match.
+val client = NapsPayClient(
+    NapsConfig.usbSerial(),        // == NapsConfig(transport = TransportType.USB_SERIAL)
+    context                        // Activity / Application context
+)
+
+// Or pin an explicit device name:
+val pinned = NapsPayClient(
+    NapsConfig(transport = TransportType.USB_SERIAL, serialPortName = "/dev/bus/usb/001/004"),
+    context
+)
+```
+
+- **Discovery** — `NapsConfig.serialPortName = null` (the default) auto-selects the
+  Ingenico device by USB vendor id `0x0B00`, or the first CDC-ACM device as a fallback.
+  Enumerate candidates yourself with `UsbSerialConnection.listDevices(context)` or
+  `UsbSerialConnection.findDeviceName(context)`.
+- **USB permission** — on `connect()`, if the app doesn't already hold permission for
+  the device, the SDK triggers the standard `UsbManager.requestPermission` broadcast
+  and waits for the user's grant. A denial fails the connection with a `NapsError`.
+- **Protocol default** — when `protocolVersion` is left unset, USB serial defaults to
+  **v1** (`'?'` terminator) and TCP defaults to **v2** (`'!'`). An explicit
+  `protocolVersion` always wins. The read loop tolerates both terminators regardless.
+- **Baud rate** — `serialBaudRate` defaults to `115200`.
+
+The rest of the API (`processPayment`, `cancelPayment`, `referencing`, …) is identical
+across both transports.
 
 ---
 
@@ -445,11 +509,14 @@ All methods are `suspend` — call from a coroutine scope (e.g. `lifecycleScope.
 
 | Parameter | Default | Description |
 |---|---|---|
-| `host` | *(required)* | Terminal IP address |
+| `host` | `null` | Terminal IP address. **Required for TCP**; unused for USB serial. |
 | `port` | `4444` | NAPS M2M TCP port |
 | `timeout` | `120_000` ms | Payment timeout (2 min for customer to tap) |
 | `confirmationTimeout` | `40_000` ms | Phase 2 hard deadline (NAPS protocol limit) |
-| `protocolVersion` | `ProtocolVersion.V2` | NAPS TLV version. Selects the expected response terminator (`'!'` = v2, `'?'` = v1); the read loop tolerates both. |
+| `transport` | `TransportType.TCP_SOCKET` | `TCP_SOCKET` (Sunmi) or `USB_SERIAL` (Ingenico Lane/3000). |
+| `serialPortName` | `null` | USB serial device name. `null` = auto-discover by vendor id `0x0B00`. |
+| `serialBaudRate` | `115200` | USB serial baud rate. |
+| `protocolVersion` | `null` | NAPS TLV version. `null` resolves per transport (USB serial → v1 `'?'`, TCP → v2 `'!'`) via `resolveProtocolVersion()`; set explicitly to override. The read loop tolerates both terminators. |
 
 ---
 
@@ -461,9 +528,12 @@ tkpay-sdk-pos-naps-android/
 │   └── src/main/java/ma/tkpay/naps/
 │       ├── NapsPayClient.kt                    # Entry point — all suspend funs
 │       ├── config/
-│       │   └── NapsConfig.kt                  # Host, port, timeouts
+│       │   └── NapsConfig.kt                  # Host, port, timeouts, transport, serial
 │       ├── connection/
-│       │   └── NapsConnection.kt              # TCP socket lifecycle + send/receive
+│       │   ├── NapsTransport.kt               # Transport interface (TCP + USB serial)
+│       │   ├── NapsConnection.kt              # TCP socket lifecycle + send/receive
+│       │   ├── UsbSerialConnection.kt         # USB-host CDC-ACM (Ingenico Lane/3000)
+│       │   └── UsbSerialDiscovery.kt          # VID 0x0B00 / CDC-ACM selection (pure)
 │       ├── models/
 │       │   ├── PaymentRequest.kt
 │       │   ├── PaymentResult.kt

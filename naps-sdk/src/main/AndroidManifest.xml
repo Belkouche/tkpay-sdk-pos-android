@@ -4,4 +4,7 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
 
+    <!-- USB host mode is only needed for the Ingenico Lane/3000 USB-serial transport. -->
+    <uses-feature android:name="android.hardware.usb.host" android:required="false" />
+
 </manifest>

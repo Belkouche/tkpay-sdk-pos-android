@@ -20,7 +20,7 @@ import java.net.Socket
  * - Timeout management
  * - Connection reuse for two-phase payment flow
  */
-class NapsConnection(private val config: NapsConfig) {
+class NapsConnection(private val config: NapsConfig) : NapsTransport {
 
     private var socket: Socket? = null
     private var writer: PrintWriter? = null
@@ -29,19 +29,21 @@ class NapsConnection(private val config: NapsConfig) {
     /**
      * Check if connection is open and valid
      */
-    val isConnected: Boolean
+    override val isConnected: Boolean
         get() = socket?.isConnected == true && socket?.isClosed == false
 
     /**
      * Connect to NAPS Pay terminal
      */
-    suspend fun connect() = withContext(Dispatchers.IO) {
+    override suspend fun connect() = withContext(Dispatchers.IO) {
+        val host = config.host
+            ?: throw NapsError.connectionFailed(IllegalStateException("TCP host not set"))
         try {
             disconnect()  // Close any existing connection
 
             socket = Socket().apply {
                 soTimeout = config.timeout.toInt()
-                connect(InetSocketAddress(config.host, config.port), config.timeout.toInt())
+                connect(InetSocketAddress(host, config.port), config.timeout.toInt())
             }
 
             writer = PrintWriter(socket!!.getOutputStream(), true)
@@ -60,9 +62,9 @@ class NapsConnection(private val config: NapsConfig) {
      * @param timeout Timeout in milliseconds (optional, uses config default)
      * @return TLV response string
      */
-    suspend fun sendAndReceive(
+    override suspend fun sendAndReceive(
         tlvMessage: String,
-        timeout: Long = config.timeout
+        timeout: Long
     ): String = withContext(Dispatchers.IO) {
         if (!isConnected) {
             throw NapsError.connectionFailed(IllegalStateException("Not connected"))
@@ -160,7 +162,7 @@ class NapsConnection(private val config: NapsConfig) {
     /**
      * Disconnect from terminal
      */
-    suspend fun disconnect() = withContext(Dispatchers.IO) {
+    override suspend fun disconnect() = withContext(Dispatchers.IO) {
         try {
             writer?.close()
             reader?.close()
@@ -172,17 +174,6 @@ class NapsConnection(private val config: NapsConfig) {
             reader = null
             socket = null
         }
-    }
-
-    /**
-     * Execute a block with automatic connection management
-     */
-    suspend fun <T> use(block: suspend (NapsConnection) -> T): T {
-        return try {
-            connect()
-            block(this)
-        } finally {
-            disconnect()
-        }
+        Unit
     }
 }
