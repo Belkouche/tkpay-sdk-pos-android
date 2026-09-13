@@ -1,5 +1,13 @@
 # TKpay NAPS POS SDK — Android (Kotlin)
 
+> Part of the NAPS SDK family — all speak the same M2M TLV protocol to the same terminals.
+> The **[C# SDK](https://github.com/Belkouche/tkpay-sdk-pos-naps-csharp) is canonical**
+> (reference implementation); this is the Android port. Siblings:
+> [Node.js](https://github.com/Belkouche/aslan-naps-node) ·
+> [iOS](https://github.com/Belkouche/tkpay-sdk-pos-ios) ·
+> [React Native](https://github.com/Belkouche/tkpay-sdk-pos-rn).
+> Test without hardware using the [emulator](https://github.com/Belkouche/tkpay-naps-emulator).
+
 Android SDK for integrating NAPS Pay terminals into your point-of-sale application  
 via either a **TCP/M2M socket** (Sunmi P2/P3, port 4444 — the default) or **USB serial**
 (Ingenico Lane/3000, CDC-ACM over USB-host mode).
