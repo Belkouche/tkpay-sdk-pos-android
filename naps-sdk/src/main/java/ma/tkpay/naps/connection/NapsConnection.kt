@@ -1,6 +1,7 @@
 package ma.tkpay.naps.connection
 
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import ma.tkpay.naps.config.NapsConfig
@@ -22,6 +23,11 @@ import java.net.SocketTimeoutException
  * - Connection reuse for two-phase payment flow
  */
 class NapsConnection(private val config: NapsConfig) : NapsTransport {
+
+    companion object {
+        /** Upper bound for one response frame (DP receipts are at most 3500 chars). */
+        internal const val MAX_FRAME_CHARS = 65_536
+    }
 
     private var socket: Socket? = null
     private var writer: PrintWriter? = null
@@ -98,12 +104,15 @@ class NapsConnection(private val config: NapsConfig) : NapsTransport {
      * the cardholder has acted). After that, chunks are drained until the frame
      * ends with a NAPS terminator ('!' for v2, '?' for v1) or until 1 second of
      * silence (NAPS Pay terminal keeps connection open after sending response).
+     * The whole read is bounded by [timeout] and [MAX_FRAME_CHARS] so a peer that
+     * trickles bytes without a terminator cannot hold the call open.
      */
     private suspend fun receiveMessage(timeout: Long): String = withContext(Dispatchers.IO) {
         val response = StringBuilder()
         val buffer = CharArray(8192)
 
         val originalTimeout = socket?.soTimeout ?: 0
+        val deadline = System.nanoTime() + timeout * 1_000_000
 
         try {
             // First read — wait for the terminal for the whole exchange timeout
@@ -115,6 +124,11 @@ class NapsConnection(private val config: NapsConfig) : NapsTransport {
             // Drain remaining chunks with a 1-second inter-chunk gap
             socket?.soTimeout = 1000
             while (!endsFrame(response)) {
+                coroutineContext.ensureActive()
+                if (System.nanoTime() > deadline) throw NapsError.timeout()
+                if (response.length > MAX_FRAME_CHARS) {
+                    throw NapsError.invalidResponse("Response exceeds $MAX_FRAME_CHARS chars without terminator")
+                }
                 val count = try {
                     reader!!.read(buffer)
                 } catch (e: SocketTimeoutException) {

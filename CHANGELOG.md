@@ -23,6 +23,8 @@ All notable changes to the TKpay NAPS POS SDK (Android) are documented here.
   until the frame *ends* with `'!'`/`'?'` or 1 s of silence. Before, it stopped after
   two chunks even without a terminator, which truncated multi-segment receipts. A
   silent terminal now raises `TIMEOUT` instead of `CONNECTION_FAILED`.
+  The whole read is bounded by the exchange timeout and a 64 KB frame cap, so a
+  peer that trickles bytes without a terminator cannot hold the call open.
 - **Management frames carry NS (004).** Duplicate (008), network test (009),
   reset (012) and referencing (013) now send `TM, NCAI, NS, DA, HE` with a generated
   sequence number (`TlvProtocol.buildManagementRequest`).

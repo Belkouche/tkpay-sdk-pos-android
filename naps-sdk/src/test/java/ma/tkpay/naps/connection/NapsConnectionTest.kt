@@ -6,6 +6,7 @@ import ma.tkpay.naps.models.ErrorCode
 import ma.tkpay.naps.models.NapsError
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Test
 import java.net.ServerSocket
@@ -72,6 +73,24 @@ class NapsConnectionTest {
         } catch (e: NapsError) {
             assertEquals(ErrorCode.TIMEOUT, e.code)
         }
+        conn.disconnect()
+        t.join()
+    }
+
+    @Test
+    fun tricklingPeerWithoutTerminatorHitsTotalDeadline() = runBlocking {
+        // One byte every 300 ms, never a terminator: the 1 s silence fallback never fires
+        val t = fakeTerminal(List(20) { "0" }, List(20) { 300L })
+        val conn = connection()
+        conn.connect()
+        val start = System.currentTimeMillis()
+        try {
+            conn.sendAndReceive("001003009", timeout = 1_500)
+            fail("expected timeout")
+        } catch (e: NapsError) {
+            assertEquals(ErrorCode.TIMEOUT, e.code)
+        }
+        assertTrue(System.currentTimeMillis() - start < 3_000)
         conn.disconnect()
         t.join()
     }
