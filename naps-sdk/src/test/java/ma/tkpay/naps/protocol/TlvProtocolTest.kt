@@ -250,4 +250,23 @@ class TlvProtocolTest {
         assertEquals("1999", fields[TlvProtocol.Tags.MT])
         assertEquals(TlvProtocol.Currency.MAD, fields[TlvProtocol.Tags.DE])
     }
+
+    // --- Cancellation confirmation (TM=004), spec §4.4 ---
+
+    @Test
+    fun cancellationConfirmation_carriesSequenceInNsNotNsa() {
+        val cancel = TlvProtocol.parse(TlvProtocol.buildCancellationRequest("000123", "0100001", "000045", 1999L))
+        val confirm = TlvProtocol.parse(
+            TlvProtocol.buildCancellationConfirmation("000123", "0100001", "000045", "000000001999")
+        )
+
+        assertEquals(TlvProtocol.MessageTypes.CANCELLATION_CONFIRMATION_REQUEST, confirm[TlvProtocol.Tags.TM])
+        assertEquals("000045", confirm[TlvProtocol.Tags.NS])
+        assertFalse("NSA must not be sent in TM=004", confirm.containsKey(TlvProtocol.Tags.NSA))
+        // 004.NS = the sequence the TM=003 carried
+        assertEquals(cancel[TlvProtocol.Tags.NSA], confirm[TlvProtocol.Tags.NS])
+        // Amount echoed verbatim from MT=103
+        assertEquals("000000001999", confirm[TlvProtocol.Tags.MT])
+        assertEquals("000123", confirm[TlvProtocol.Tags.STAN])
+    }
 }

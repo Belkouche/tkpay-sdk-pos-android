@@ -356,11 +356,16 @@ lifecycleScope.launch {
         stan       = savedStan,
         registerId = "01",
         cashierId  = "00001",
-        sequence   = savedSequence
+        sequence   = savedSequence,
+        amountCentimes = savedAmountCentimes  // required by NapsPay v5.4.4+
     )
 
     if (cancel.success) {
         println("Voided — STAN: ${cancel.stan}")
+    } else if (cancel.pending) {
+        // No TM=104 reply, or CR=995: the reversal may have executed. Never treat as voided —
+        // check with printDuplicate(registerId, cashierId, stan = cancel.stan) before retrying.
+        println("Void unconfirmed — verify STAN ${cancel.stan}")
     } else {
         println("Void failed [${cancel.responseCode}]: ${cancel.error}")
     }

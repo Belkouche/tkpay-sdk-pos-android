@@ -8,6 +8,9 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import kotlinx.coroutines.runBlocking
+import java.net.ServerSocket
+import kotlin.concurrent.thread
 import java.util.concurrent.atomic.AtomicInteger
 
 class NapsPayClientTest {
@@ -98,5 +101,96 @@ class NapsPayClientTest {
         val phase1 = mapOf(TlvProtocol.Tags.CR to "000")
         val phase2 = mapOf(TlvProtocol.Tags.CR to "000", TlvProtocol.Tags.STAN to "000123")
         assertTrue(client.buildPaymentResult(phase1, phase2).isApproved())
+    }
+
+    // --- Cancellation confirmation (TM=104) classification, spec §4.4 ---
+
+    private val cancelResponse by lazy {
+        mapOf(
+            TlvProtocol.Tags.TM to "103",
+            TlvProtocol.Tags.CR to "000",
+            TlvProtocol.Tags.STAN to "000123",
+            TlvProtocol.Tags.MT to "000000001999",
+            TlvProtocol.Tags.DP to receipt("ANNULATION")
+        )
+    }
+
+    private fun confirm(cr: String) =
+        mapOf(TlvProtocol.Tags.TM to "104", TlvProtocol.Tags.CR to cr, TlvProtocol.Tags.STAN to "000456")
+
+    @Test
+    fun cancellation_cr000And480AreSuccess() {
+        for (cr in listOf("000", "480")) {
+            val result = client.buildCancellationResult("000123", cancelResponse, confirm(cr))
+            assertTrue(cr, result.success)
+            assertFalse(cr, result.pending)
+            assertEquals(cr, result.responseCode)
+            assertEquals("000456", result.stan)
+        }
+    }
+
+    @Test
+    fun cancellation_noTm104ReplyIsPendingNotSuccess() {
+        val result = client.buildCancellationResult("000123", cancelResponse, null)
+        assertFalse(result.success)
+        assertTrue(result.pending)
+        assertEquals("000123", result.stan)
+        assertTrue(result.merchantReceipt!!.toPlainText().contains("ANNULATION"))
+    }
+
+    @Test
+    fun cancellation_cr995IsPendingNotSuccess() {
+        val result = client.buildCancellationResult("000123", cancelResponse, confirm("995"))
+        assertFalse(result.success)
+        assertTrue(result.pending)
+        assertEquals("995", result.responseCode)
+        assertEquals("000123", result.stan)
+        assertNotNull(result.merchantReceipt)
+    }
+
+    @Test
+    fun cancellation_otherCodesAreHardFailures() {
+        for (cr in listOf("482", "909", "992", "")) {
+            val result = client.buildCancellationResult("000123", cancelResponse, confirm(cr))
+            assertFalse(cr, result.success)
+            assertFalse(cr, result.pending)
+        }
+    }
+
+    @Test
+    fun cancelPayment_terminalSilentAfterTm004FailsClosedAsPending() = runBlocking {
+        val server = ServerSocket(0)
+        val received = mutableListOf<String>()
+        val terminal = thread {
+            server.accept().use { socket ->
+                val input = socket.getInputStream()
+                val buf = ByteArray(1024)
+                received += String(buf, 0, input.read(buf))  // TM=003
+                val reply = TlvProtocol.buildField(TlvProtocol.Tags.TM, "103") +
+                    TlvProtocol.buildField(TlvProtocol.Tags.CR, "000") +
+                    TlvProtocol.buildField(TlvProtocol.Tags.STAN, "000123") +
+                    TlvProtocol.buildField(TlvProtocol.Tags.MT, "000000001999") +
+                    TlvProtocol.buildField(TlvProtocol.Tags.DP, receipt("ANNULATION")) + "!"
+                socket.getOutputStream().write(reply.toByteArray())
+                received += String(buf, 0, input.read(buf))  // TM=004, never answered
+                Thread.sleep(2_500)
+            }
+        }
+        val silentClient = NapsPayClient(
+            NapsConfig(host = "127.0.0.1", port = server.localPort, confirmationTimeout = 1_500)
+        )
+
+        val result = silentClient.cancelPayment("000123", "01", "00001", "000045", 1999L)
+        terminal.join()
+        server.close()
+
+        assertFalse(result.success)
+        assertTrue(result.pending)
+        assertEquals("000123", result.stan)
+        assertNotNull(result.merchantReceipt)
+        val tm004 = TlvProtocol.parse(received[1])
+        assertEquals("004", tm004[TlvProtocol.Tags.TM])
+        assertEquals("000045", tm004[TlvProtocol.Tags.NS])
+        assertEquals("000000001999", tm004[TlvProtocol.Tags.MT])
     }
 }

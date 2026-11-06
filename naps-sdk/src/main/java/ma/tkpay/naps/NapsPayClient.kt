@@ -1,6 +1,7 @@
 package ma.tkpay.naps
 
 import android.content.Context
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import ma.tkpay.naps.config.NapsConfig
@@ -387,10 +388,14 @@ class NapsPayClient(
      * Cancel (void) a previous transaction — two-phase flow (TM=003 → TM=004)
      *
      * NapsPay v5.4.4+ requires [amountCentimes] (TAG 002) in the TM=003 frame.
-     * Flow on a single TCP connection:
-     *   1. Send TM=003 → terminal replies MT=103 (CR=000 = accepted)
-     *   2. Send TM=004 echoing the amount from MT=103 → terminal replies
-     *      MT=104 with the final result (CR=000/995 = success)
+     * Flow on a single TCP connection (spec §4.3/§4.4):
+     *   1. Send TM=003 → terminal replies MT=103 (CR=000 = transaction found)
+     *   2. Send TM=004 (NS = same sequence as TM=003) echoing the amount from
+     *      MT=103 → the terminal executes the reversal and replies MT=104
+     *
+     * Fails closed: only MT=104 CR=000/480 is a success. No MT=104 reply, or
+     * CR=995, returns a non-success result with [CancellationResult.pending] set,
+     * the STAN and the TM=103 merchant receipt — verify with [printDuplicate].
      *
      * @param stan STAN of the transaction to cancel
      * @param registerId Register ID (2 digits)
@@ -420,12 +425,7 @@ class NapsPayClient(
 
             // MT=104 direct means already finalised (single-phase firmware)
             if (mt == TlvProtocol.MessageTypes.CANCELLATION_CORRECTION) {
-                return@withContext CancellationResult(
-                    success = responseCode == "000",
-                    responseCode = responseCode,
-                    stan = fields[TlvProtocol.Tags.STAN],
-                    error = if (responseCode != "000") "Cancellation failed with code: $responseCode" else null
-                )
+                return@withContext buildCancellationResult(stan, emptyMap(), fields)
             }
 
             if (mt != TlvProtocol.MessageTypes.CANCELLATION_RESPONSE || responseCode != "000") {
@@ -437,29 +437,84 @@ class NapsPayClient(
                 )
             }
 
-            // Phase 2: TM=004 on the same connection, echoing the amount from MT=103
+            // Phase 2: TM=004 on the same connection, echoing the amount from MT=103.
+            // From here the reversal may execute, so any failure is "pending", never a plain failure.
             val confirmRequest = TlvProtocol.buildCancellationConfirmation(
                 fields[TlvProtocol.Tags.STAN] ?: stan,
                 ncai,
                 sequence,
                 fields[TlvProtocol.Tags.MT]
             )
-            val confirmResponse = connection.sendAndReceive(confirmRequest, timeout = config.confirmationTimeout)
-            val fields2 = TlvProtocol.parse(confirmResponse)
-            val cr2 = fields2[TlvProtocol.Tags.CR] ?: ""
-            // CR=000 = confirmed, CR=995 = host processing (also success)
-            val success2 = cr2 == "000" || cr2 == "995"
-
-            CancellationResult(
-                success = success2,
-                responseCode = cr2,
-                stan = fields2[TlvProtocol.Tags.STAN] ?: fields[TlvProtocol.Tags.STAN],
-                error = if (!success2) "Cancellation failed with code: $cr2" else null
-            )
+            val confirmFields = try {
+                TlvProtocol.parse(
+                    connection.sendAndReceive(confirmRequest, timeout = config.confirmationTimeout)
+                )
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                null
+            }
+            buildCancellationResult(stan, fields, confirmFields)
         } catch (e: Exception) {
             CancellationResult(success = false, responseCode = "", error = e.message)
         } finally {
             connection.disconnect()
+        }
+    }
+
+    /**
+     * Classify the Cancellation Confirmation Response (TM=104), spec §4.4
+     *
+     * - CR=000 or 480 → cancellation completed (success)
+     * - no reply ([confirmResponse] null) or CR=995 → pending: outcome unknown
+     *   (995 has been seen on successful voids on a live v5.4.4 terminal)
+     * - anything else → failure
+     *
+     * @param stan STAN of the transaction to cancel (as requested)
+     * @param cancelResponse Fields of the Cancellation Response (TM=103)
+     * @param confirmResponse Fields of the TM=104 reply, or null when none arrived
+     */
+    internal fun buildCancellationResult(
+        stan: String,
+        cancelResponse: Map<String, String>,
+        confirmResponse: Map<String, String>?
+    ): CancellationResult {
+        val originalStan = cancelResponse[TlvProtocol.Tags.STAN] ?: stan
+        val merchantReceipt = cancelResponse[TlvProtocol.Tags.DP]?.let {
+            ReceiptParser.parse(it, ReceiptType.MERCHANT)
+        }
+        val cr = confirmResponse?.get(TlvProtocol.Tags.CR) ?: ""
+
+        return when {
+            confirmResponse == null -> CancellationResult(
+                success = false,
+                responseCode = "",
+                stan = originalStan,
+                error = "No cancellation confirmation (TM=104) received — void unconfirmed, verify with printDuplicate(stan)",
+                pending = true,
+                merchantReceipt = merchantReceipt
+            )
+            cr == "000" || cr == "480" -> CancellationResult(
+                success = true,
+                responseCode = cr,
+                stan = confirmResponse[TlvProtocol.Tags.STAN] ?: originalStan,
+                merchantReceipt = merchantReceipt
+            )
+            cr == "995" -> CancellationResult(
+                success = false,
+                responseCode = cr,
+                stan = originalStan,
+                error = "${TlvProtocol.describeResponse(cr)} (995) — void unconfirmed, verify with printDuplicate(stan)",
+                pending = true,
+                merchantReceipt = merchantReceipt
+            )
+            else -> CancellationResult(
+                success = false,
+                responseCode = cr,
+                stan = confirmResponse[TlvProtocol.Tags.STAN] ?: originalStan,
+                error = "Cancellation failed with code: $cr",
+                merchantReceipt = merchantReceipt
+            )
         }
     }
 

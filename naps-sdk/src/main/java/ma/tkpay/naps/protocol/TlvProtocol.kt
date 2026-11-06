@@ -288,6 +288,8 @@ object TlvProtocol {
      * Build cancellation confirmation request TLV (TM=004)
      *
      * Sent on the same connection after receiving MT=103 from TM=003.
+     * [sequence] goes in NS (004), never NSA (005): spec §4.4 requires
+     * 004.NS = the sequence of the TM=003 it confirms.
      * [amount] must echo the amount (TAG 002, 12-digit) from the MT=103
      * response — omitting it is refused with CR=909 on NapsPay v5.4.4+.
      */

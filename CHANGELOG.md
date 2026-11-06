@@ -43,6 +43,17 @@ All notable changes to the TKpay NAPS POS SDK (Android) are documented here.
 - **Confirmation refusal.** A Confirmation Response (TM=102) with CR≠000 (e.g. 302
   sale not found, 482 already cancelled; the terminal auto-reverses) is now a failed
   `PaymentResult`. Before, it was reported as `success = true`.
+- **Void outcome fails closed (spec §4.3/§4.4).** TM=103 CR=000 only means
+  "transaction found"; TM=004 executes the reversal. Only TM=104 CR=000 or 480 is a
+  success now. If no TM=104 reply arrives (timeout or connection loss after TM=004),
+  or CR=995 comes back, the result is `success = false` with the new
+  `CancellationResult.pending = true`, the STAN of the transaction and the TM=103
+  receipt (new `merchantReceipt`). Verify with `printDuplicate(..., stan)`. CR=995 is
+  "Server processing error" in the spec, but was seen with successful voids on the
+  live v5.4.4 terminal. Before, 995 was reported as success and a missing reply as a
+  plain failure. Every other CR is a failure.
+- **TM=004 sequence.** Confirmed and pinned by tests: TM=004 carries the TM=003
+  sequence in NS (004), never in NSA (005), and echoes the MT=103 amount (TAG 002).
 - **Kept on purpose:** `cancelPayment` stays two-phase (TM=003 → MT=103 → TM=004 →
   MT=104), as the NapsPay app does. Verified against the v5.4.4 emulator, which
   implements TM=004.
