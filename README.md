@@ -482,7 +482,7 @@ The [emulator](https://github.com/Belkouche/tkpay-naps-emulator) plays the termi
 It needs Python 3 and nothing else.
 
 ```bash
-python3 /Users/belkouche/Projects/tkpay/tkpay-naps-emulator/naps_emulator.py --port 4444
+python3 ../tkpay-naps-emulator/naps_emulator.py --port 4444
 ```
 
 Point the SDK at `127.0.0.1:4444` (or the computer's LAN IP from a device). `--mode` picks the
@@ -501,8 +501,7 @@ behaviour; one mode per emulator process:
 | `void_995` | TM 104 with CR 995 (pending) |
 | `void_no_confirm` | Never answers TM 004 (pending) |
 
-`--protocol v1` switches the terminator to `?`; `--debug` prints every field. The void modes
-need an emulator version with two-phase void support (commit `5cc8536` or later).
+`--protocol v1` switches the terminator to `?`; `--debug` prints every field.
 
 **This repo's tests**
 
