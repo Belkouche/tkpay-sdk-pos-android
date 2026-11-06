@@ -124,8 +124,7 @@ class NapsPayClient(
                 paymentResponse
             )
 
-            // Build successful result
-            val result = buildSuccessfulResult(paymentResponse, confirmationResponse)
+            val result = buildPaymentResult(paymentResponse, confirmationResponse)
 
             // Send notification to gateway
             GatewayNotifier.notifyTransaction(
@@ -195,6 +194,25 @@ class NapsPayClient(
         )
 
         return TlvProtocol.parse(tlvResponse)
+    }
+
+    /**
+     * Map the Phase-1 and Phase-2 responses of an approved Phase 1 to the payment result
+     *
+     * The terminal can still refuse the confirmation (TM=102 with CR≠000, e.g.
+     * 302 sale not found, 482 already cancelled; it then auto-reverses), so the
+     * payment is only approved when the confirmation response is CR=000.
+     */
+    internal fun buildPaymentResult(
+        paymentResponse: Map<String, String>,
+        confirmationResponse: Map<String, String>
+    ): PaymentResult {
+        val responseCode = confirmationResponse[TlvProtocol.Tags.CR] ?: "000"
+        return if (responseCode == "000") {
+            buildSuccessfulResult(paymentResponse, confirmationResponse)
+        } else {
+            buildFailedResult(responseCode, confirmationResponse)
+        }
     }
 
     /**

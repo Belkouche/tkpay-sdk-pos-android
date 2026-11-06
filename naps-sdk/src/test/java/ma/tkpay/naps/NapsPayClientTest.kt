@@ -80,4 +80,23 @@ class NapsPayClientTest {
         assertEquals("Transaction already cancelled", client.buildFailedResult("482", emptyMap()).error)
         assertEquals("Payment declined — code: 999", client.buildFailedResult("999", emptyMap()).error)
     }
+
+    @Test
+    fun paymentResult_phase2RefusalIsAFailedPayment() {
+        val phase1 = mapOf(TlvProtocol.Tags.CR to "000", TlvProtocol.Tags.STAN to "000123")
+        val phase2 = mapOf(TlvProtocol.Tags.CR to "302", TlvProtocol.Tags.STAN to "000123")
+
+        val result = client.buildPaymentResult(phase1, phase2)
+
+        assertFalse(result.success)
+        assertEquals("302", result.responseCode)
+        assertEquals("Transaction not found", result.error)
+    }
+
+    @Test
+    fun paymentResult_phase2ApprovalIsApproved() {
+        val phase1 = mapOf(TlvProtocol.Tags.CR to "000")
+        val phase2 = mapOf(TlvProtocol.Tags.CR to "000", TlvProtocol.Tags.STAN to "000123")
+        assertTrue(client.buildPaymentResult(phase1, phase2).isApproved())
+    }
 }

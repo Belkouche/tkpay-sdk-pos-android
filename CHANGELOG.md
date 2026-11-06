@@ -40,9 +40,12 @@ All notable changes to the TKpay NAPS POS SDK (Android) are documented here.
 - **Sequence numbers.** Wrap from 999999 to 000001 atomically, using a CAS loop
   because `minSdk` is 21.
 - **Network test.** The error message now uses `describeResponse(code)`.
+- **Confirmation refusal.** A Confirmation Response (TM=102) with CR≠000 (e.g. 302
+  sale not found, 482 already cancelled; the terminal auto-reverses) is now a failed
+  `PaymentResult`. Before, it was reported as `success = true`.
 - **Kept on purpose:** `cancelPayment` stays two-phase (TM=003 → MT=103 → TM=004 →
-  MT=104), as the NapsPay app does. The C# SDK stops at MT=103/104. The emulator does
-  not implement TM=004, so the second phase times out there.
+  MT=104), as the NapsPay app does. Verified against the v5.4.4 emulator, which
+  implements TM=004.
 
 ## [1.3.0] - 2026-09-12
 
