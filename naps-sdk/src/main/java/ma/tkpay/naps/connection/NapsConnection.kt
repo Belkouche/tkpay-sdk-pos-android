@@ -10,6 +10,7 @@ import java.io.InputStreamReader
 import java.io.PrintWriter
 import java.net.InetSocketAddress
 import java.net.Socket
+import java.net.SocketTimeoutException
 
 /**
  * TCP connection manager for NAPS Pay terminal
@@ -77,10 +78,14 @@ class NapsConnection(private val config: NapsConfig) : NapsTransport {
 
             // Receive response with timeout
             withTimeout(timeout) {
-                receiveMessage()
+                receiveMessage(timeout)
             }
         } catch (e: kotlinx.coroutines.TimeoutCancellationException) {
             throw NapsError.timeout(e)
+        } catch (e: SocketTimeoutException) {
+            throw NapsError.timeout(e)
+        } catch (e: NapsError) {
+            throw e
         } catch (e: Exception) {
             throw NapsError.connectionFailed(e)
         }
@@ -89,49 +94,34 @@ class NapsConnection(private val config: NapsConfig) : NapsTransport {
     /**
      * Receive message from socket
      *
-     * Stops as soon as a NAPS end-of-message terminator is seen ('!' for v2,
-     * '?' for v1); otherwise reads until no more data is available for 1 second
-     * (NAPS Pay terminal keeps connection open after sending response).
+     * The first read blocks for up to [timeout] ms (the terminal only answers once
+     * the cardholder has acted). After that, chunks are drained until the frame
+     * ends with a NAPS terminator ('!' for v2, '?' for v1) or until 1 second of
+     * silence (NAPS Pay terminal keeps connection open after sending response).
      */
-    private suspend fun receiveMessage(): String = withContext(Dispatchers.IO) {
+    private suspend fun receiveMessage(timeout: Long): String = withContext(Dispatchers.IO) {
         val response = StringBuilder()
         val buffer = CharArray(8192)
 
-        // Set short timeout for detecting end of message
-        val originalTimeout = socket?.soTimeout ?: 1000
-        socket?.soTimeout = 1000
+        val originalTimeout = socket?.soTimeout ?: 0
 
         try {
-            while (true) {
-                try {
-                    val count = reader!!.read(buffer)
-                    if (count == -1) break  // Connection closed
-                    if (count == 0) break   // No data
+            // First read — wait for the terminal for the whole exchange timeout
+            socket?.soTimeout = timeout.coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
+            val first = reader!!.read(buffer)
+            if (first == -1) throw NapsError.invalidResponse("Connection closed before response")
+            response.append(buffer, 0, first)
 
-                    response.append(buffer, 0, count)
-
-                    // Stop immediately once the frame terminator arrives.
-                    if (endsFrame(response)) break
-
-                    // If less than buffer size, we likely have all data
-                    if (count < buffer.size) {
-                        // Try to read more, but timeout quickly if nothing
-                        try {
-                            val additionalCount = reader!!.read(buffer)
-                            if (additionalCount > 0) {
-                                response.append(buffer, 0, additionalCount)
-                            }
-                        } catch (e: Exception) {
-                            // Timeout means we have all the data
-                            break
-                        }
-                        break
-                    }
-                } catch (e: Exception) {
-                    // Timeout means we have all the data
-                    if (response.isNotEmpty()) break
-                    throw e
+            // Drain remaining chunks with a 1-second inter-chunk gap
+            socket?.soTimeout = 1000
+            while (!endsFrame(response)) {
+                val count = try {
+                    reader!!.read(buffer)
+                } catch (e: SocketTimeoutException) {
+                    break  // 1-second silence — treat as end-of-message
                 }
+                if (count == -1) break  // Connection closed
+                response.append(buffer, 0, count)
             }
         } finally {
             // Restore original timeout
@@ -146,17 +136,14 @@ class NapsConnection(private val config: NapsConfig) : NapsTransport {
     }
 
     /**
-     * True once the accumulated response carries a NAPS end-of-message
+     * True once the accumulated response ends with a NAPS end-of-message
      * terminator: '!' (v2) or '?' (v1). Both are recognised regardless of the
      * configured [NapsConfig.protocolVersion] so a terminal that answers with
      * the other version's terminator is still handled.
      */
     private fun endsFrame(response: StringBuilder): Boolean {
-        for (i in response.indices) {
-            val c = response[i]
-            if (c == '!' || c == '?') return true
-        }
-        return false
+        val last = response.lastOrNull() ?: return false
+        return last == '!' || last == '?'
     }
 
     /**

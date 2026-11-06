@@ -2,6 +2,46 @@
 
 All notable changes to the TKpay NAPS POS SDK (Android) are documented here.
 
+## [1.4.0] - 2026-11-06
+
+### NapsPay v5.4.4 sync with the canonical C# SDK (1.4.0)
+
+- **Confirmation frame (TM=002).** No longer sends DATR (018) / HETR (019). Field
+  order now matches the reference exactly: TM, NCAI, NS, [MT, DE], STAN, [NCAR],
+  [DAEX], DA, HE.
+- **Receipts.** The merchant copy now comes from the Payment Response (TM=101) DP
+  and the customer copy from the Confirmation Response (TM=102) DP. Previously both
+  were parsed from the TM=102 DP.
+- **Declined payments.** `PaymentResult` now keeps the masked PAN (NCAR) and the
+  decline receipt (DP) as `merchantReceipt`. The error text follows the reference:
+  `909` "Terminal or server is down", `302` "Transaction not found", `482`
+  "Transaction already cancelled", `480` "Transaction cancelled", otherwise
+  "<description> — code: <CR>".
+- **TCP read loop.** The first read now waits for the full exchange timeout. Before,
+  it gave up after 1 s and reported `CONNECTION_FAILED` when the terminal took longer
+  to answer, e.g. while waiting for the card. After the first chunk, the loop drains
+  until the frame *ends* with `'!'`/`'?'` or 1 s of silence. Before, it stopped after
+  two chunks even without a terminator, which truncated multi-segment receipts. A
+  silent terminal now raises `TIMEOUT` instead of `CONNECTION_FAILED`.
+- **Management frames carry NS (004).** Duplicate (008), network test (009),
+  reset (012) and referencing (013) now send `TM, NCAI, NS, DA, HE` with a generated
+  sequence number (`TlvProtocol.buildManagementRequest`).
+- **Referencing TIDE (020).** `referencing(registerId, cashierId, tide = "01")` sends
+  the parameter-set selector (`TlvProtocol.Tide.MERCHANT` "01" / `RECHARGE` "02");
+  `ReferencingResult.parameterSet` echoes it.
+- **Totals report.** New `totals(registerId, cashierId)` (TM=010, management form)
+  → `TotalsResult { success, responseCode, receipt, error }`.
+- **`BinaryTlvProtocol`.** Port of the reference binary Sunmi framing:
+  `buildRequest`, `wrapWithLength`, `parseResponse`.
+- **Amounts.** `TlvProtocol.toCentimes` rounds to the nearest centime (19.99 → 1999).
+  Before, it truncated (1998). Used by the payment request and the confirmation.
+- **Sequence numbers.** Wrap from 999999 to 000001 atomically, using a CAS loop
+  because `minSdk` is 21.
+- **Network test.** The error message now uses `describeResponse(code)`.
+- **Kept on purpose:** `cancelPayment` stays two-phase (TM=003 → MT=103 → TM=004 →
+  MT=104), as the NapsPay app does. The C# SDK stops at MT=103/104. The emulator does
+  not implement TM=004, so the second phase times out there.
+
 ## [1.3.0] - 2026-09-12
 
 ### USB serial transport (Ingenico Lane/3000)

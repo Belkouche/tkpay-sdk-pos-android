@@ -21,6 +21,7 @@ import ma.tkpay.naps.models.ReferencingResult
 import ma.tkpay.naps.models.ResetResult
 import ma.tkpay.naps.models.ReceiptType
 import ma.tkpay.naps.models.SettlementResult
+import ma.tkpay.naps.models.TotalsResult
 import ma.tkpay.naps.protocol.ReceiptParser
 import ma.tkpay.naps.protocol.TlvProtocol
 import java.util.concurrent.atomic.AtomicInteger
@@ -124,7 +125,7 @@ class NapsPayClient(
             )
 
             // Build successful result
-            val result = buildSuccessfulResult(confirmationResponse)
+            val result = buildSuccessfulResult(paymentResponse, confirmationResponse)
 
             // Send notification to gateway
             GatewayNotifier.notifyTransaction(
@@ -175,7 +176,7 @@ class NapsPayClient(
         // Thread the coherence fields from the approved Payment Response (TM=101)
         // into the confirmation (TM=002) per NAPS TLV v2 §4.2. MT/DE come from
         // the request amount; NCAR/DAEX are echoed from the response when present.
-        val amountCentimes = (request.amount * 100).toLong()
+        val amountCentimes = TlvProtocol.toCentimes(request.amount)
         val ncar = paymentResponse[TlvProtocol.Tags.NCAR]
         val daex = paymentResponse[TlvProtocol.Tags.DAEX]
 
@@ -198,16 +199,19 @@ class NapsPayClient(
 
     /**
      * Build successful payment result
+     *
+     * The merchant copy is the DP (010) of the Payment Response (TM=101); the
+     * customer copy is the DP of the Confirmation Response (TM=102). Transaction
+     * fields come from the confirmation response.
      */
-    private fun buildSuccessfulResult(fields: Map<String, String>): PaymentResult {
-        // Parse receipts
-        val merchantReceipt = fields[TlvProtocol.Tags.DP]?.let { dpValue ->
-            // Merchant receipt is typically first in the data
+    internal fun buildSuccessfulResult(
+        paymentResponse: Map<String, String>,
+        fields: Map<String, String>
+    ): PaymentResult {
+        val merchantReceipt = paymentResponse[TlvProtocol.Tags.DP]?.let { dpValue ->
             ReceiptParser.parse(dpValue, ReceiptType.MERCHANT)
         }
 
-        // In NAPS Pay, customer receipt is often a separate DP tag or part of same data
-        // For now, we'll create both from same data
         val customerReceipt = fields[TlvProtocol.Tags.DP]?.let { dpValue ->
             ReceiptParser.parse(dpValue, ReceiptType.CUSTOMER)
         }
@@ -234,30 +238,45 @@ class NapsPayClient(
 
     /**
      * Build failed payment result
+     *
+     * Keeps the masked PAN and the decline receipt (DP) printed by the terminal.
      */
-    private fun buildFailedResult(
+    internal fun buildFailedResult(
         responseCode: String,
         fields: Map<String, String>
     ): PaymentResult {
-        val errorMessage = TlvProtocol.describeResponse(responseCode)
+        val errorMessage = when (responseCode) {
+            "909" -> "Terminal or server is down"
+            "302" -> "Transaction not found"
+            "482" -> "Transaction already cancelled"
+            "480" -> "Transaction cancelled"
+            else -> TlvProtocol.RESPONSE_CODES[responseCode]?.let { "$it — code: $responseCode" }
+                ?: "Payment declined — code: $responseCode"
+        }
 
         return PaymentResult(
             success = false,
             responseCode = responseCode,
             stan = fields[TlvProtocol.Tags.STAN],
+            maskedCardNumber = fields[TlvProtocol.Tags.NCAR],
+            merchantReceipt = fields[TlvProtocol.Tags.DP]?.let {
+                ReceiptParser.parse(it, ReceiptType.MERCHANT)
+            },
             error = errorMessage
         )
     }
 
     /**
-     * Generate sequence number (6 digits)
+     * Generate sequence number (6 digits), wrapping from 999999 back to 000001
      */
-    private fun generateSequence(): String {
-        val seq = sequenceGenerator.getAndIncrement()
-        if (seq > 999999) {
-            sequenceGenerator.set(1)
+    internal fun generateSequence(): String {
+        // CAS loop rather than getAndUpdate (API 24+; minSdk is 21)
+        while (true) {
+            val seq = sequenceGenerator.get()
+            if (sequenceGenerator.compareAndSet(seq, if (seq >= 999999) 1 else seq + 1)) {
+                return seq.toString().padStart(6, '0')
+            }
         }
-        return seq.toString().padStart(6, '0')
     }
 
     /**
@@ -328,7 +347,7 @@ class NapsPayClient(
 
         try {
             connection.connect()
-            val tlvRequest = TlvProtocol.buildNetworkTestRequest(ncai)
+            val tlvRequest = TlvProtocol.buildNetworkTestRequest(ncai, generateSequence())
             val tlvResponse = connection.sendAndReceive(tlvRequest, timeout = 10_000)
             val fields = TlvProtocol.parse(tlvResponse)
             val responseCode = fields[TlvProtocol.Tags.CR] ?: ""
@@ -337,7 +356,7 @@ class NapsPayClient(
                 success = responseCode == "000",
                 responseCode = responseCode,
                 rttMs = System.currentTimeMillis() - startMs,
-                error = if (responseCode != "000") "Network test failed with code: $responseCode" else null
+                error = if (responseCode != "000") TlvProtocol.describeResponse(responseCode) else null
             )
         } catch (e: Exception) {
             NetworkTestResult(success = false, responseCode = "", error = e.message)
@@ -446,7 +465,7 @@ class NapsPayClient(
 
         try {
             connection.connect()
-            val tlvRequest = TlvProtocol.buildDuplicateRequest(ncai, stan)
+            val tlvRequest = TlvProtocol.buildDuplicateRequest(ncai, stan, generateSequence())
             val tlvResponse = connection.sendAndReceive(tlvRequest, timeout = config.timeout)
             val fields = TlvProtocol.parse(tlvResponse)
             val responseCode = fields[TlvProtocol.Tags.CR] ?: ""
@@ -482,7 +501,7 @@ class NapsPayClient(
 
         try {
             connection.connect()
-            val tlvRequest = TlvProtocol.buildResetRequest(ncai)
+            val tlvRequest = TlvProtocol.buildResetRequest(ncai, generateSequence())
             val tlvResponse = connection.sendAndReceive(tlvRequest, timeout = 10_000)
             val fields = TlvProtocol.parse(tlvResponse)
             val responseCode = fields[TlvProtocol.Tags.CR] ?: ""
@@ -503,18 +522,24 @@ class NapsPayClient(
      * Run terminal referencing / configuration sync (TM=013)
      *
      * Must be called at least once before the first payment to download
-     * merchant config from the NAPS server.
+     * merchant config from the NAPS server. Sends the TIDE (020) selecting the
+     * parameter set to load.
      *
      * @param registerId Register ID (2 digits)
      * @param cashierId Cashier ID (5 digits)
+     * @param tide Parameter set: "01" merchant (default), "02" recharge
      */
-    suspend fun referencing(registerId: String, cashierId: String): ReferencingResult = withContext(Dispatchers.IO) {
+    suspend fun referencing(
+        registerId: String,
+        cashierId: String,
+        tide: String = TlvProtocol.Tide.MERCHANT
+    ): ReferencingResult = withContext(Dispatchers.IO) {
         val ncai = registerId + cashierId
         val connection = newTransport()
 
         try {
             connection.connect()
-            val tlvRequest = TlvProtocol.buildReferencingRequest(ncai)
+            val tlvRequest = TlvProtocol.buildReferencingRequest(ncai, generateSequence(), tide)
             val tlvResponse = connection.sendAndReceive(tlvRequest, timeout = config.timeout)
             val fields = TlvProtocol.parse(tlvResponse)
             val responseCode = fields[TlvProtocol.Tags.CR] ?: ""
@@ -526,10 +551,47 @@ class NapsPayClient(
                 success = responseCode == "000",
                 responseCode = responseCode,
                 receipt = receipt,
+                parameterSet = tide,
                 error = if (responseCode != "000") "Referencing failed with code: $responseCode" else null
             )
         } catch (e: Exception) {
-            ReferencingResult(success = false, responseCode = "", error = e.message)
+            ReferencingResult(success = false, responseCode = "", parameterSet = tide, error = e.message)
+        } finally {
+            connection.disconnect()
+        }
+    }
+
+    /**
+     * Request the terminal's running batch totals report (TM=010)
+     *
+     * Unlike [settlement], this is the management-form frame (with NS) and
+     * returns the totals receipt printed by the terminal.
+     *
+     * @param registerId Register ID (2 digits)
+     * @param cashierId Cashier ID (5 digits)
+     */
+    suspend fun totals(registerId: String, cashierId: String): TotalsResult = withContext(Dispatchers.IO) {
+        val ncai = registerId + cashierId
+        val connection = newTransport()
+
+        try {
+            connection.connect()
+            val tlvRequest = TlvProtocol.buildTotalsRequest(ncai, generateSequence())
+            val tlvResponse = connection.sendAndReceive(tlvRequest, timeout = config.timeout)
+            val fields = TlvProtocol.parse(tlvResponse)
+            val responseCode = fields[TlvProtocol.Tags.CR] ?: ""
+            val receipt = fields[TlvProtocol.Tags.DP]?.let {
+                ReceiptParser.parse(it, ReceiptType.MERCHANT)
+            }
+
+            TotalsResult(
+                success = responseCode == "000",
+                responseCode = responseCode,
+                receipt = receipt,
+                error = if (responseCode != "000") "Totals failed with code: $responseCode" else null
+            )
+        } catch (e: Exception) {
+            TotalsResult(success = false, responseCode = "", error = e.message)
         } finally {
             connection.disconnect()
         }

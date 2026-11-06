@@ -74,7 +74,7 @@ data class TransactionNotification(
 internal object GatewayNotifier {
 
     /** SDK version */
-    private const val SDK_VERSION = "1.0.0"
+    private const val SDK_VERSION = "1.4.0"
 
     /** Gateway URL (static, not configurable) */
     private const val GATEWAY_URL = "https://api.tkpay.ma"

@@ -53,7 +53,7 @@ class TlvProtocolTest {
 
     @Test
     fun confirmationRequest_fieldOrderMatchesReference() {
-        // Expected order: TM, NCAI, NS, MT, DE, STAN, NCAR, DAEX, DA, HE, DATR, HETR
+        // Expected order: TM, NCAI, NS, MT, DE, STAN, NCAR, DAEX, DA, HE
         val msg = TlvProtocol.buildConfirmationRequest(
             stan = "000123",
             ncai = "0100001",
@@ -72,9 +72,7 @@ class TlvProtocolTest {
             TlvProtocol.Tags.NCAR,
             TlvProtocol.Tags.DAEX,
             TlvProtocol.Tags.DA,
-            TlvProtocol.Tags.HE,
-            TlvProtocol.Tags.DATR,
-            TlvProtocol.Tags.HETR
+            TlvProtocol.Tags.HE
         )
         assertEquals(expectedOrder, tagSequence(msg))
     }
@@ -192,5 +190,64 @@ class TlvProtocolTest {
         val raw = TlvProtocol.buildField(TlvProtocol.Tags.NCAR, "5167940123453315") + "!"
         val fields = TlvProtocol.parse(raw)
         assertEquals("516794******3315", fields[TlvProtocol.Tags.NCAR])
+    }
+
+    // --- Management frames (TM=008/009/010/012/013) carry NS, spec v5.4.4 ---
+
+    @Test
+    fun managementRequests_carrySequenceInReferenceOrder() {
+        val frames = mapOf(
+            TlvProtocol.MessageTypes.NETWORK_TEST_REQUEST to TlvProtocol.buildNetworkTestRequest("0100001", "000042"),
+            TlvProtocol.MessageTypes.TOTALS_REQUEST to TlvProtocol.buildTotalsRequest("0100001", "000042"),
+            TlvProtocol.MessageTypes.RESET_REQUEST to TlvProtocol.buildResetRequest("0100001", "000042"),
+            TlvProtocol.MessageTypes.DUPLICATE_REQUEST to TlvProtocol.buildDuplicateRequest("0100001", sequence = "000042")
+        )
+        for ((tm, msg) in frames) {
+            val expected = listOf(
+                TlvProtocol.Tags.TM, TlvProtocol.Tags.NCAI, TlvProtocol.Tags.NS,
+                TlvProtocol.Tags.DA, TlvProtocol.Tags.HE
+            )
+            assertEquals("TM=$tm", expected, tagSequence(msg))
+            val fields = TlvProtocol.parse(msg)
+            assertEquals(tm, fields[TlvProtocol.Tags.TM])
+            assertEquals("000042", fields[TlvProtocol.Tags.NS])
+        }
+    }
+
+    @Test
+    fun duplicateRequest_appendsOptionalStan() {
+        val fields = TlvProtocol.parse(TlvProtocol.buildDuplicateRequest("0100001", "000777", "000042"))
+        assertEquals("000777", fields[TlvProtocol.Tags.STAN])
+        assertEquals("000042", fields[TlvProtocol.Tags.NS])
+    }
+
+    @Test
+    fun referencingRequest_carriesTideDefaultMerchant() {
+        val msg = TlvProtocol.buildReferencingRequest("0100001", "000042")
+        assertEquals(TlvProtocol.Tags.TIDE, tagSequence(msg).last())
+        assertEquals(TlvProtocol.Tide.MERCHANT, TlvProtocol.parse(msg)[TlvProtocol.Tags.TIDE])
+        assertEquals("01", TlvProtocol.Tide.MERCHANT)
+    }
+
+    @Test
+    fun referencingRequest_carriesRechargeTide() {
+        val msg = TlvProtocol.buildReferencingRequest("0100001", "000042", TlvProtocol.Tide.RECHARGE)
+        assertEquals("02", TlvProtocol.parse(msg)[TlvProtocol.Tags.TIDE])
+    }
+
+    // --- Amount conversion ---
+
+    @Test
+    fun toCentimes_roundsInsteadOfTruncating() {
+        assertEquals(1999L, TlvProtocol.toCentimes(19.99))
+        assertEquals(15000L, TlvProtocol.toCentimes(150.0))
+        assertEquals(1L, TlvProtocol.toCentimes(0.01))
+    }
+
+    @Test
+    fun paymentRequest_amountUsesRoundedCentimes() {
+        val fields = TlvProtocol.parse(TlvProtocol.buildPaymentRequest(19.99, "0100001", "000001"))
+        assertEquals("1999", fields[TlvProtocol.Tags.MT])
+        assertEquals(TlvProtocol.Currency.MAD, fields[TlvProtocol.Tags.DE])
     }
 }

@@ -505,13 +505,18 @@ All methods are `suspend` — call from a coroutine scope (e.g. `lifecycleScope.
 | Method | TM | Description |
 |---|---|---|
 | `processPayment(request)` | 001 / 002 | Full two-phase payment |
-| `referencing(registerId, cashierId)` | 013 | Sync merchant config — run once before first payment |
+| `referencing(registerId, cashierId, tide = "01")` | 013 | Sync merchant config — run once before first payment. `tide` (020) picks the parameter set: `TlvProtocol.Tide.MERCHANT` ("01") or `RECHARGE` ("02") |
 | `networkTest(registerId, cashierId)` | 009 | Protocol-level health check with RTT |
-| `cancelPayment(stan, registerId, cashierId, sequence)` | 003 | Void last approved transaction |
+| `cancelPayment(stan, registerId, cashierId, sequence, amountCentimes?)` | 003 / 004 | Void last approved transaction. Pass `amountCentimes` (required by NapsPay v5.4.4+) |
 | `printDuplicate(registerId, cashierId, stan?)` | 008 | Reprint last or specific receipt |
 | `settlement(registerId, cashierId)` | 010 | End-of-day batch settlement |
+| `totals(registerId, cashierId)` | 010 | Running batch totals report (returns the totals receipt) |
 | `resetPinPad(registerId, cashierId)` | 012 | Reset terminal to idle |
 | `testConnection()` | — | TCP-only socket test (no TLV sent) |
+
+Targets **NapsPay v5.4.4** (NAPS TLV v2). Management frames (TM=008/009/010/012/013)
+carry a sequence number (NS/004). `BinaryTlvProtocol` exposes the binary
+`tag(1) + length(2 BE) + value` framing used by some Sunmi deployments.
 
 ### `NapsConfig` parameters
 

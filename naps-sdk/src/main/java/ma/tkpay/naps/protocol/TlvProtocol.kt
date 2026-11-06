@@ -5,7 +5,7 @@ import java.text.SimpleDateFormat
 import java.util.*
 
 /**
- * TLV Protocol implementation for NAPS Pay M2M (v5.0.3)
+ * TLV Protocol implementation for NAPS Pay M2M (NapsPay v5.4.4)
  *
  * Tag-Length-Value format:
  * - TAG: 3 digits
@@ -70,6 +70,8 @@ object TlvProtocol {
         const val NETWORK_TEST_RESPONSE = "109"
         const val SETTLEMENT_REQUEST = "010"
         const val SETTLEMENT_RESPONSE = "110"
+        const val TOTALS_REQUEST = "010"      // Totals report (shares TM with settlement)
+        const val TOTALS_RESPONSE = "110"
         const val RESET_REQUEST = "012"
         const val RESET_RESPONSE = "112"
         const val REFERENCING_REQUEST = "013"
@@ -81,6 +83,14 @@ object TlvProtocol {
      */
     object Currency {
         const val MAD = "504"  // Moroccan Dirham
+    }
+
+    /**
+     * TIDE (020) parameter sets for referencing (TM=013)
+     */
+    object Tide {
+        const val MERCHANT = "01"  // Merchant parameter set
+        const val RECHARGE = "02"  // Recharge parameter set
     }
 
     /**
@@ -229,7 +239,7 @@ object TlvProtocol {
         ncai: String,
         sequence: String
     ): String {
-        val amountMinor = (amount * 100).toInt().toString()
+        val amountMinor = toCentimes(amount).toString()
         val dateTime = getCurrentDateTime()
 
         return buildField(Tags.TM, MessageTypes.PAYMENT_REQUEST) +
@@ -242,6 +252,13 @@ object TlvProtocol {
                buildField(Tags.DATR, dateTime.date) +
                buildField(Tags.HETR, dateTime.time)
     }
+
+    /**
+     * Convert a MAD amount to centimes, rounding to the nearest centime so
+     * binary floating-point error (e.g. 19.99 * 100 = 1998.999…) never drops
+     * a centime.
+     */
+    fun toCentimes(amount: Double): Long = Math.round(amount * 100)
 
     /**
      * Build cancellation request TLV (TM=003)
@@ -293,53 +310,66 @@ object TlvProtocol {
     }
 
     /**
-     * Build duplicate receipt request TLV (TM=008)
+     * Build a management-operation TLV frame: TM + NCAI + NS + DA + HE, followed
+     * by optional [extraFields]. Used by the duplicate (008), network test (009),
+     * totals (010), reset (012) and referencing (013) operations, which carry no amount.
      */
-    fun buildDuplicateRequest(ncai: String, stan: String? = null): String {
+    fun buildManagementRequest(
+        tm: String,
+        ncai: String,
+        sequence: String = "000001",
+        extraFields: List<Pair<String, String>> = emptyList()
+    ): String {
         val dateTime = getCurrentDateTime()
 
-        return buildField(Tags.TM, MessageTypes.DUPLICATE_REQUEST) +
-               buildField(Tags.NCAI, ncai) +
-               buildField(Tags.DA, dateTime.date) +
-               buildField(Tags.HE, dateTime.time) +
-               (if (stan != null) buildField(Tags.STAN, stan) else "")
+        var msg = buildField(Tags.TM, tm) +
+                  buildField(Tags.NCAI, ncai) +
+                  buildField(Tags.NS, sequence) +
+                  buildField(Tags.DA, dateTime.date) +
+                  buildField(Tags.HE, dateTime.time)
+        for ((tag, value) in extraFields) msg += buildField(tag, value)
+        return msg
     }
+
+    /**
+     * Build duplicate receipt request TLV (TM=008)
+     */
+    fun buildDuplicateRequest(ncai: String, stan: String? = null, sequence: String = "000001"): String =
+        buildManagementRequest(
+            MessageTypes.DUPLICATE_REQUEST, ncai, sequence,
+            if (stan != null) listOf(Tags.STAN to stan) else emptyList()
+        )
 
     /**
      * Build network test request TLV (TM=009)
      */
-    fun buildNetworkTestRequest(ncai: String): String {
-        val dateTime = getCurrentDateTime()
+    fun buildNetworkTestRequest(ncai: String, sequence: String = "000001"): String =
+        buildManagementRequest(MessageTypes.NETWORK_TEST_REQUEST, ncai, sequence)
 
-        return buildField(Tags.TM, MessageTypes.NETWORK_TEST_REQUEST) +
-               buildField(Tags.NCAI, ncai) +
-               buildField(Tags.DA, dateTime.date) +
-               buildField(Tags.HE, dateTime.time)
-    }
+    /**
+     * Build totals report request TLV (TM=010)
+     */
+    fun buildTotalsRequest(ncai: String, sequence: String = "000001"): String =
+        buildManagementRequest(MessageTypes.TOTALS_REQUEST, ncai, sequence)
 
     /**
      * Build reset PinPAD request TLV (TM=012)
      */
-    fun buildResetRequest(ncai: String): String {
-        val dateTime = getCurrentDateTime()
-
-        return buildField(Tags.TM, MessageTypes.RESET_REQUEST) +
-               buildField(Tags.NCAI, ncai) +
-               buildField(Tags.DA, dateTime.date) +
-               buildField(Tags.HE, dateTime.time)
-    }
+    fun buildResetRequest(ncai: String, sequence: String = "000001"): String =
+        buildManagementRequest(MessageTypes.RESET_REQUEST, ncai, sequence)
 
     /**
      * Build referencing request TLV (TM=013)
+     *
+     * Carries the TIDE (020) selecting the parameter set to load:
+     * [Tide.MERCHANT] ("01", default) or [Tide.RECHARGE] ("02").
      */
-    fun buildReferencingRequest(ncai: String): String {
-        val dateTime = getCurrentDateTime()
-
-        return buildField(Tags.TM, MessageTypes.REFERENCING_REQUEST) +
-               buildField(Tags.NCAI, ncai) +
-               buildField(Tags.DA, dateTime.date) +
-               buildField(Tags.HE, dateTime.time)
-    }
+    fun buildReferencingRequest(
+        ncai: String,
+        sequence: String = "000001",
+        tide: String = Tide.MERCHANT
+    ): String =
+        buildManagementRequest(MessageTypes.REFERENCING_REQUEST, ncai, sequence, listOf(Tags.TIDE to tide))
 
     /**
      * Build settlement request TLV (TM=010 — telecollecte)
@@ -365,7 +395,7 @@ object TlvProtocol {
      *
      * Optional fields are omitted when null/blank, keeping older callers working.
      * Field order mirrors the reference: TM, NCAI, NS, [MT, DE], STAN, [NCAR],
-     * [DAEX], DA, HE, DATR, HETR.
+     * [DAEX], DA, HE. DATR/HETR are not sent (they belong to the TM=001 request).
      */
     fun buildConfirmationRequest(
         stan: String,
@@ -393,9 +423,7 @@ object TlvProtocol {
         if (!daex.isNullOrEmpty()) msg += buildField(Tags.DAEX, daex)
 
         msg += buildField(Tags.DA, dateTime.date) +
-               buildField(Tags.HE, dateTime.time) +
-               buildField(Tags.DATR, dateTime.date) +
-               buildField(Tags.HETR, dateTime.time)
+               buildField(Tags.HE, dateTime.time)
 
         return msg
     }

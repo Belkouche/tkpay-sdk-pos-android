@@ -4,5 +4,6 @@ data class ReferencingResult(
     val success: Boolean,
     val responseCode: String,
     val receipt: Receipt? = null,
-    val error: String? = null
+    val error: String? = null,
+    val parameterSet: String? = null
 )
