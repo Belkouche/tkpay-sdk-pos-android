@@ -436,14 +436,17 @@ object TlvProtocol {
     fun parse(rawTlvString: String): Map<String, String> {
         val fields = mutableMapOf<String, String>()
 
-        // Stop at the first end-of-message terminator ('!' v2, '?' v1) so any
-        // receipt content or noise after it is ignored. Both are accepted so the
-        // parser is protocol-version agnostic.
-        val termIndex = rawTlvString.indexOfFirst { it == TERMINATOR_V2 || it == TERMINATOR_V1 }
-        val tlvString = if (termIndex >= 0) rawTlvString.substring(0, termIndex) else rawTlvString
+        // Stop at an end-of-message terminator ('!' v2, '?' v1) found at a field
+        // boundary, so any noise after it is ignored. Terminator characters inside
+        // a length-prefixed value (e.g. the '?' ending the DP print lines, §5) are
+        // data. Both are accepted so the parser is protocol-version agnostic.
+        val tlvString = rawTlvString
         var index = 0
 
         while (index < tlvString.length) {
+            val c = tlvString[index]
+            if (c == TERMINATOR_V2 || c == TERMINATOR_V1) break
+
             // Need at least 6 chars for tag + length
             if (index + 6 > tlvString.length) break
 

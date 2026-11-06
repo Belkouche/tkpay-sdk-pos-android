@@ -40,6 +40,11 @@ All notable changes to the TKpay NAPS POS SDK (Android) are documented here.
 - **Sequence numbers.** Wrap from 999999 to 000001 atomically, using a CAS loop
   because `minSdk` is 21.
 - **Network test.** The error message now uses `describeResponse(code)`.
+- **Receipts (DP, spec §5).** `ReceiptParser` now skips the `'*'` line separator and
+  stops at the `'?'` end marker. Before, it lost its place after the first line, so a
+  real terminal receipt came back with one line. `TlvProtocol.parse` now only treats
+  `'!'`/`'?'` as the frame terminator at a field boundary, so the `'?'` inside the DP
+  value no longer cuts off the fields after it.
 - **Confirmation refusal.** A Confirmation Response (TM=102) with CR≠000 (e.g. 302
   sale not found, 482 already cancelled; the terminal auto-reverses) is now a failed
   `PaymentResult`. Before, it was reported as `success = true`.

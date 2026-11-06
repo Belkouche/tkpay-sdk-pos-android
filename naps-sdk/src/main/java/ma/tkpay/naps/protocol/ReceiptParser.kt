@@ -29,6 +29,10 @@ object ReceiptParser {
         var content = ""
 
         while (index < dpValue.length) {
+            // Spec §5: line groups are separated by '*'; '?' ends the print lines
+            if (dpValue[index] == '*') { index++; continue }
+            if (dpValue[index] == '?') break
+
             // Need at least 6 chars for tag + length
             if (index + 6 > dpValue.length) break
 
