@@ -3,6 +3,7 @@ package ma.tkpay.naps
 import kotlinx.coroutines.runBlocking
 import ma.tkpay.naps.config.NapsConfig
 import ma.tkpay.naps.connection.NapsConnection
+import ma.tkpay.naps.models.CancellationResult
 import ma.tkpay.naps.models.ErrorCode
 import ma.tkpay.naps.models.NapsError
 import ma.tkpay.naps.models.PaymentResult
@@ -23,7 +24,8 @@ import org.junit.Test
  *   NAPS_EMULATOR_PORT=4454 NAPS_EMULATOR_MODE=approve ./gradlew :naps-sdk:testDebugUnitTest
  *
  * Modes covered: approve, decline, error (--code 116), confirm_error (--code 482),
- * no_confirm. The payment flow is driven through NapsConnection + TlvProtocol (the
+ * no_confirm, and the void modes void_refuse (--code 482), void_480, void_995,
+ * void_no_confirm. The payment flow is driven through NapsConnection + TlvProtocol (the
  * same frames and result mapping processPayment uses) so no gateway notification
  * is fired from tests.
  */
@@ -83,13 +85,20 @@ class EmulatorIntegrationTest {
         assertNotNull(result.customerReceipt)
     }
 
+    /** Two-phase void TM=003 → TM=004 for STAN 000123, sequence 000045, 19.99 MAD. */
+    private fun void(): CancellationResult = runBlocking {
+        client.cancelPayment("000123", "01", "00001", "000045", 1999L)
+    }
+
     @Test
-    fun approve_twoPhaseVoid() = runBlocking {
+    fun approve_twoPhaseVoid() {
         requireMode("approve")
-        val result = client.cancelPayment("000123", "01", "00001", "000001", 1999L)
+        val result = void()
         assertTrue(result.error, result.success)
+        assertFalse(result.pending)
         assertEquals("000", result.responseCode)
         assertNotNull(result.stan)
+        assertNotNull(result.merchantReceipt)
     }
 
     @Test
@@ -158,5 +167,47 @@ class EmulatorIntegrationTest {
         } catch (e: NapsError) {
             assertEquals(ErrorCode.TIMEOUT, e.code)
         }
+    }
+
+    // --- void (TM=003 → TM=004) outcomes, spec §4.3/§4.4 ---
+
+    @Test
+    fun void480_isSuccess() {
+        requireMode("void_480")
+        val result = void()
+        assertTrue(result.error, result.success)
+        assertFalse(result.pending)
+        assertEquals("480", result.responseCode)
+    }
+
+    @Test
+    fun void995_isPendingWithStanAndReceipt() {
+        requireMode("void_995")
+        val result = void()
+        assertFalse(result.success)
+        assertTrue(result.pending)
+        assertEquals("995", result.responseCode)
+        assertEquals("000123", result.stan)
+        assertNotNull(result.merchantReceipt)
+    }
+
+    @Test
+    fun voidNoConfirm_isPendingWithStanAndReceipt() {
+        requireMode("void_no_confirm")
+        val result = void()
+        assertFalse(result.success)
+        assertTrue(result.pending)
+        assertEquals("", result.responseCode)
+        assertEquals("000123", result.stan)
+        assertNotNull(result.merchantReceipt)
+    }
+
+    @Test
+    fun voidRefuse_isFailureNotPending() {
+        requireMode("void_refuse")
+        val result = void()
+        assertFalse(result.success)
+        assertFalse(result.pending)
+        assertEquals("482", result.responseCode)
     }
 }
