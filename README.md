@@ -1,101 +1,48 @@
 # TKpay NAPS POS SDK — Android (Kotlin)
 
-> Part of the NAPS SDK family — all speak the same M2M TLV protocol to the same terminals.
-> The **[C# SDK](https://github.com/Belkouche/tkpay-sdk-pos-naps-csharp) is canonical**
-> (reference implementation); this is the Android port. Siblings:
-> [Node.js](https://github.com/Belkouche/aslan-naps-node) ·
-> [iOS](https://github.com/Belkouche/tkpay-sdk-pos-ios) ·
-> [React Native](https://github.com/Belkouche/tkpay-sdk-pos-rn).
-> Test without hardware using the [emulator](https://github.com/Belkouche/tkpay-naps-emulator).
+Kotlin library that lets an Android point-of-sale app drive a NAPS Pay payment terminal:
+take a card payment, void it, reprint receipts, run end-of-day settlement and maintenance
+commands. It speaks the NAPS Pay ECR TLV protocol (spec v2.0, NapsPay v5.4.4) and turns the
+terminal's replies into plain Kotlin results.
 
-Android SDK for integrating NAPS Pay terminals into your point-of-sale application  
-via either a **TCP/M2M socket** (Sunmi P2/P3, port 4444 — the default) or **USB serial**
-(Ingenico Lane/3000, CDC-ACM over USB-host mode).
+> Part of the NAPS SDK family. The **[C# SDK](https://github.com/Belkouche/tkpay-sdk-pos-naps-csharp)
+> is the reference implementation**; this is the Android port. Test without hardware using the
+> [emulator](https://github.com/Belkouche/tkpay-naps-emulator).
 
-> **USB serial transport (new in 1.3.0).** Set `transport = TransportType.USB_SERIAL`
-> to drive an Ingenico Lane/3000 over USB. It uses Android **USB-host mode** and
-> requires a granted **runtime USB permission**; it cannot run against a TCP
-> emulator. This path is unit-tested at the discovery/config layer only — it has
-> **not** been verified on physical USB-host hardware. See
-> [USB serial (Ingenico Lane/3000)](#usb-serial-ingenico-lane3000).
+**Terminals and connections**
 
-> **NAPS TLV v2 (default since 1.2.1).** The payment confirmation (TM=002) now
-> echoes the amount (MT + DE), masked PAN (NCAR) and card expiry (DAEX) from the
-> approved payment response for the terminal's coherence checks. Frames are
-> terminated with `'!'` (v2); the reader still tolerates the v1 `'?'` terminator.
-> Set `protocolVersion = ProtocolVersion.V1` on `NapsConfig` to prefer v1.
-
----
-
-## Table of Contents
-
-1. [How it works](#how-it-works)
-2. [Installation](#installation)
-3. [Permissions](#permissions)
-4. [Quick start](#quick-start)
-5. [Before the first payment](#before-the-first-payment)
-6. [Process a payment](#process-a-payment)
-7. [Cancel a transaction](#cancel-a-transaction)
-8. [Reprint a receipt](#reprint-a-receipt)
-9. [Settlement (end of day)](#settlement-end-of-day)
-10. [Reset the terminal](#reset-the-terminal)
-11. [Receipt API](#receipt-api)
-12. [Response codes](#response-codes)
-13. [Full API reference](#full-api-reference)
-14. [Project structure](#project-structure)
-15. [Building](#building)
-16. [Security](#security)
-
----
-
-## How it works
-
-Every message between your app and the terminal is a **TLV string** — a sequence of  
-`TAG(3 digits) + LENGTH(3 digits) + VALUE` fields concatenated with no separator:
-
-```
-001003001 002012000000010000 003007010000 013003504 …
-│         │                  │             │
-TM=001    MT=10000 (100 MAD) NCAI=0100001  DE=504 (MAD)
-```
-
-A payment requires **two TCP phases on the same open socket**:
-
-```
-Your App           SDK                Terminal
-   │                │                    │
-   │ processPayment()│                   │
-   │───────────────>│                   │
-   │                │──── TM=001 ──────>│  Phase 1: payment request
-   │                │   (customer taps card / enters PIN)
-   │                │<─── TM=101 ───────│  RC=000 + STAN
-   │                │──── TM=002 ──────>│  Phase 2: confirmation  ← same socket!
-   │                │<─── TM=102 ───────│  receipt (DP tag)
-   │  PaymentResult │                   │
-   │<───────────────│                   │
-```
-
-> **Critical:** Phase 2 must be sent **within 40 seconds** on the exact same TCP connection.  
-> The SDK handles this automatically — you call `processPayment()` and get a single result.
-
-All 8 NAPS M2M message types are supported:
-
-| TM | Direction | Function |
+| Terminal (spec §2) | Connection | Supported by this SDK |
 |---|---|---|
-| 001 / 101 | Request / Response | Payment |
-| 002 / 102 | Request / Response | Confirmation (Phase 2) |
-| 003 / 103 | Request / Response | Cancellation |
-| 008 / 108 | Request / Response | Duplicate receipt |
-| 009 / 109 | Request / Response | Network test |
-| 010 / 110 | Request / Response | Settlement |
-| 012 / 112 | Request / Response | Reset PinPAD |
-| 013 / 113 | Request / Response | Referencing |
+| Sunmi P2, Sunmi P3, Sunmi P2 Smart PAD | Wi-Fi, TCP port 4444 | **Yes** — default transport, tested against the emulator |
+| Sunmi P2 / P3 / P2 Smart PAD | USB | No |
+| Ingenico Self 5000, Ingenico Lane 3600 | USB only | **Implemented, not verified on hardware** — `TransportType.USB_SERIAL` (Android USB-host, CDC-ACM, Ingenico vendor id `0x0B00`) |
+
+Requirements: Android 5.0+ (API 21), Kotlin 1.9+, coroutines. All SDK calls are `suspend`
+functions; they switch to `Dispatchers.IO` themselves.
 
 ---
 
-## Installation
+## Contents
 
-### Option A — JitPack (recommended)
+1. [Install](#install)
+2. [Quickstart](#quickstart)
+3. [How a payment works](#how-a-payment-works)
+4. [How a void works](#how-a-void-works)
+5. [Other operations](#other-operations)
+6. [Receipts](#receipts)
+7. [PAN masking and data sent by the SDK](#pan-masking-and-data-sent-by-the-sdk)
+8. [Response codes](#response-codes)
+9. [Errors and timeouts](#errors-and-timeouts)
+10. [Configuration](#configuration)
+11. [Testing with the emulator](#testing-with-the-emulator)
+12. [Troubleshooting](#troubleshooting)
+13. [Changelog](#changelog)
+
+---
+
+## Install
+
+**JitPack**
 
 ```gradle
 // settings.gradle (root)
@@ -107,13 +54,16 @@ dependencyResolutionManagement {
 ```
 
 ```gradle
-// app/build.gradle
+// app/build.gradle — TAG is a release tag of this repo
 dependencies {
-    implementation 'com.github.Belkouche:tkpay-sdk-pos-android:v1.1.0'
+    implementation 'com.github.Belkouche:tkpay-sdk-pos-android:TAG'
 }
 ```
 
-### Option B — Local module
+`v1.3.0` is the latest published tag. Version 1.4.0 (this README, NapsPay v5.4.4) is not
+tagged yet. Until it is, use the local module below.
+
+**Local module**
 
 ```bash
 git clone https://github.com/Belkouche/tkpay-sdk-pos-android.git
@@ -123,485 +73,499 @@ git clone https://github.com/Belkouche/tkpay-sdk-pos-android.git
 // settings.gradle
 include ':naps-sdk'
 project(':naps-sdk').projectDir = new File('../tkpay-sdk-pos-android/naps-sdk')
-```
 
-```gradle
 // app/build.gradle
 dependencies {
     implementation project(':naps-sdk')
 }
 ```
 
----
-
-## Permissions
-
-```xml
-<!-- AndroidManifest.xml -->
-<uses-permission android:name="android.permission.INTERNET" />
-<uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
-```
-
-For the USB serial transport, also declare USB-host support (already merged from the
-SDK's manifest, listed here for completeness):
-
-```xml
-<uses-feature android:name="android.hardware.usb.host" android:required="false" />
-```
+**Permissions.** The SDK's manifest declares `INTERNET`, `ACCESS_NETWORK_STATE` and the
+optional `android.hardware.usb.host` feature. They are merged into your app automatically.
 
 ---
 
-## USB serial (Ingenico Lane/3000)
+## Quickstart
 
-> **Not device-verified.** The serial transport is implemented against Android
-> **USB-host mode** using [`usb-serial-for-android`](https://github.com/mik3y/usb-serial-for-android)
-> and the platform `UsbManager`. It requires USB-host hardware and a runtime USB
-> permission grant, so it **cannot** be validated against the TCP emulator. Only the
-> pure logic (device discovery + per-transport protocol default) is covered by unit
-> tests; the on-device serial I/O has not been run on real hardware.
-
-Select the transport on `NapsConfig` and pass a `Context` to the client (the USB
-stack needs it):
+Start the emulator (see [Testing with the emulator](#testing-with-the-emulator)), then:
 
 ```kotlin
-import android.content.Context
-import ma.tkpay.naps.NapsPayClient
-import ma.tkpay.naps.config.NapsConfig
-import ma.tkpay.naps.config.TransportType
-
-// Auto-discover the Ingenico device by USB vendor id 0x0B00 (2816);
-// falls back to the first CDC-ACM device if no vendor match.
-val client = NapsPayClient(
-    NapsConfig.usbSerial(),        // == NapsConfig(transport = TransportType.USB_SERIAL)
-    context                        // Activity / Application context
-)
-
-// Or pin an explicit device name:
-val pinned = NapsPayClient(
-    NapsConfig(transport = TransportType.USB_SERIAL, serialPortName = "/dev/bus/usb/001/004"),
-    context
-)
-```
-
-- **Discovery** — `NapsConfig.serialPortName = null` (the default) auto-selects the
-  Ingenico device by USB vendor id `0x0B00`, or the first CDC-ACM device as a fallback.
-  Enumerate candidates yourself with `UsbSerialConnection.listDevices(context)` or
-  `UsbSerialConnection.findDeviceName(context)`.
-- **USB permission** — on `connect()`, if the app doesn't already hold permission for
-  the device, the SDK triggers the standard `UsbManager.requestPermission` broadcast
-  and waits for the user's grant. A denial fails the connection with a `NapsError`.
-- **Protocol default** — when `protocolVersion` is left unset, USB serial defaults to
-  **v1** (`'?'` terminator) and TCP defaults to **v2** (`'!'`). An explicit
-  `protocolVersion` always wins. The read loop tolerates both terminators regardless.
-- **Baud rate** — `serialBaudRate` defaults to `115200`.
-
-The rest of the API (`processPayment`, `cancelPayment`, `referencing`, …) is identical
-across both transports.
-
----
-
-## Quick start
-
-```kotlin
+import kotlinx.coroutines.runBlocking
 import ma.tkpay.naps.NapsPayClient
 import ma.tkpay.naps.config.NapsConfig
 import ma.tkpay.naps.models.PaymentRequest
 
-// 1 — Configure once (at app startup or per-transaction)
-val client = NapsPayClient(
-    NapsConfig(
-        host = "192.168.1.100",      // Terminal IP on your LAN
-        port = 4444,                  // Default NAPS M2M port
-        timeout = 120_000L,           // 2 min — customer has time to tap
-        confirmationTimeout = 40_000L // 40 s — NAPS hard limit for Phase 2
-    )
-)
+fun main() = runBlocking {
+    val port = System.getenv("NAPS_PORT")?.toInt() ?: 4444
+    val client = NapsPayClient(NapsConfig(host = "127.0.0.1", port = port))
 
-// 2 — First time only: sync terminal config from NAPS server
-lifecycleScope.launch {
-    val ref = client.referencing("01", "00001")
-    check(ref.success) { "Referencing failed: ${ref.error}" }
-}
-
-// 3 — Take a payment
-lifecycleScope.launch {
     val result = client.processPayment(
-        PaymentRequest(amount = 49.90, registerId = "01", cashierId = "00001")
+        PaymentRequest(amount = 10.00, registerId = "01", cashierId = "00001")
     )
-    if (result.isApproved()) println("Approved — STAN: ${result.stan}")
-}
-```
 
-**`registerId`** — your POS register number, exactly 2 digits (e.g. `"01"`).  
-**`cashierId`** — the cashier identifier, exactly 5 digits (e.g. `"00001"`).  
-Together they form the **NCAI** (`"0100001"`) sent in every TLV message.
-
----
-
-## Before the first payment
-
-### Referencing — sync terminal config (TM=013)
-
-Run this **once before the first payment** of the day (or after a new terminal install).  
-It downloads the merchant configuration from the NAPS server.
-
-```kotlin
-lifecycleScope.launch {
-    val result = client.referencing(registerId = "01", cashierId = "00001")
-
-    if (result.success) {
-        println("Terminal configured")
-        result.receipt?.let { printReceipt(it) }  // optional config summary
+    if (result.isApproved()) {
+        println("Approved — STAN ${result.stan}, card ${result.getFormattedCardNumber()}")
+        println(result.customerReceipt?.toPlainText())
     } else {
-        println("Referencing failed: ${result.error}")
+        println("Declined [${result.responseCode}]: ${result.error}")
     }
 }
 ```
 
-### Network test — protocol-level health check (TM=009)
+This is [`examples/quickstart/Quickstart.kt`](examples/quickstart/Quickstart.kt). The repo
+runs it against the emulator with
+`NAPS_PORT=4444 ./gradlew :naps-sdk:testDebugUnitTest --tests '*QuickstartExampleTest' --rerun -i`.
+Output:
 
-Unlike `testConnection()` which only opens a TCP socket, `networkTest()` sends an actual  
-NAPS M2M ping and verifies the terminal responds RC=000. Use this to confirm the terminal  
-is truly ready before the first transaction.
-
-```kotlin
-lifecycleScope.launch {
-    val result = client.networkTest(registerId = "01", cashierId = "00001")
-
-    println("Ready: ${result.success}")
-    println("Round-trip: ${result.rttMs}ms")
-}
 ```
+Approved — STAN 903125, card 516794******3315
+TKpay
+--------------------------------
+06/11/2026 23:41:32
+TKPAY DEMO
+CASABLANCA
+...
+MONTANT: 10.00 MAD
+--------------------------------
+DEBIT
+Copie Client
+```
+
+In an Android app, use the terminal's Wi-Fi IP as `host` and call the client from a coroutine
+(for example `lifecycleScope.launch { ... }`) instead of `runBlocking`.
+
+`registerId` (2 digits) and `cashierId` (5 digits) identify your till and cashier; together
+they form the NCAI field the terminal echoes back.
 
 ---
 
-## Process a payment
+## How a payment works
 
-```kotlin
-import ma.tkpay.naps.models.PaymentRequest
-import ma.tkpay.naps.models.NapsError
-import ma.tkpay.naps.models.ErrorCode
+A payment is two request/response pairs on **one TCP connection**. `processPayment` runs both
+and closes the connection.
 
-lifecycleScope.launch {
-    try {
-        val result = client.processPayment(
-            PaymentRequest(
-                amount     = 149.99,   // MAD — converted to centimes internally
-                registerId = "01",
-                cashierId  = "00001"
-                // sequence = "000042" // optional — auto-generated if omitted
-            )
-        )
-
-        if (result.isApproved()) {
-            // Save these — needed for cancellation
-            val stan     = result.stan      // e.g. "444491"
-            val sequence = result.sequence  // e.g. "000001"
-
-            println("Card:   ${result.getFormattedCardNumber()}")  // 516794******3315
-            println("Auth:   ${result.authNumber}")
-            println("Expiry: ${result.getFormattedExpiry()}")      // 10/30
-            println("Mode:   ${result.entryMode}")                 // CC or SC
-
-            result.merchantReceipt?.let { printReceipt(it) }
-            result.customerReceipt?.let { printReceipt(it) }
-        } else {
-            println("Declined [${result.responseCode}]: ${result.error}")
-        }
-
-    } catch (e: NapsError) {
-        when (e.code) {
-            ErrorCode.TIMEOUT           -> showToast("Terminal not responding")
-            ErrorCode.CONNECTION_FAILED -> showToast("Cannot reach terminal")
-            else                        -> showToast("Error: ${e.message}")
-        }
-    }
-}
+```mermaid
+sequenceDiagram
+    participant App as Your app (SDK)
+    participant T as Terminal
+    App->>T: TM 001 Payment request (amount, NCAI, NS)
+    Note over T: customer presents card, enters PIN
+    T-->>App: TM 101 Payment response (CR, STAN, masked PAN, merchant receipt)
+    alt CR = 000
+        App->>T: TM 002 Confirmation (same NS, echoes amount, PAN, expiry)
+        T-->>App: TM 102 Confirmation response (CR, customer receipt)
+    end
 ```
 
-**`PaymentResult` fields:**
+1. **TM 001 → 101.** The SDK sends the amount in centimes, the NCAI and a sequence number
+   (NS, generated unless you set `PaymentRequest.sequence`). The terminal answers only after
+   the customer has acted, so this read waits up to `timeout` (default 2 minutes). If CR ≠ 000,
+   the payment is declined and there is no Phase 2.
+2. **TM 002 → 102.** On the same connection, the SDK confirms with the same NS. It echoes
+   the amount, the masked PAN and the card expiry from TM 101, so the terminal can check it is
+   confirming the right sale. The reply must arrive within `confirmationTimeout` (default 40 s).
+   **Only TM 102 with CR = 000 is an approved payment.** If the terminal refuses the
+   confirmation (e.g. 302, 482), it reverses the sale itself and the SDK returns a failed result.
 
-| Field | Type | Description |
-|---|---|---|
-| `success` | `Boolean` | `true` only when RC = 000 |
-| `responseCode` | `String` | Raw 3-digit NAPS code |
-| `stan` | `String?` | System Trace Audit Number — **save for cancellation** |
-| `sequence` | `String?` | Sequence used — **save for cancellation** |
-| `maskedCardNumber` | `String?` | First 6 + last 4: `516794******3315` |
-| `cardExpiry` | `String?` | YYMM format (`"3010"`) — use `getFormattedExpiry()` |
-| `cardholderName` | `String?` | As embossed on card |
-| `entryMode` | `String?` | `CC` = contactless, `SC` = chip |
-| `authNumber` | `String?` | Bank authorization number |
-| `transactionDate` | `String?` | DDMMYYYY |
-| `transactionTime` | `String?` | HHMMSS |
-| `merchantReceipt` | `Receipt?` | Merchant copy |
-| `customerReceipt` | `Receipt?` | Customer copy |
-| `error` | `String?` | Human-readable error when `success = false` |
+The merchant receipt comes from TM 101 and the customer receipt from TM 102.
 
----
-
-## Cancel a transaction
-
-**TM=003** voids the last approved transaction. You need the `stan` and `sequence`  
-from the original `PaymentResult` — save them immediately after every approved payment.
+### Process a payment
 
 ```kotlin
-// After processPayment() succeeds, save these:
-val savedStan     = result.stan     ?: return
-val savedSequence = result.sequence ?: return
-
-// When customer requests a void:
-lifecycleScope.launch {
-    val cancel = client.cancelPayment(
-        stan       = savedStan,
-        registerId = "01",
-        cashierId  = "00001",
-        sequence   = savedSequence,
-        amountCentimes = savedAmountCentimes  // required by NapsPay v5.4.4+
+val amount = 150.00
+try {
+    val result = client.processPayment(
+        PaymentRequest(amount = amount, registerId = "01", cashierId = "00001")
     )
-
-    if (cancel.success) {
-        println("Voided — STAN: ${cancel.stan}")
-    } else if (cancel.pending) {
-        // No TM=104 reply, or CR=995: the reversal may have executed. Never treat as voided —
-        // check with printDuplicate(registerId, cashierId, stan = cancel.stan) before retrying.
-        println("Void unconfirmed — verify STAN ${cancel.stan}")
-    } else {
-        println("Void failed [${cancel.responseCode}]: ${cancel.error}")
-    }
-}
-```
-
-> Only the **last approved transaction on the current session** can be cancelled.
-
----
-
-## Reprint a receipt
-
-**TM=008** asks the terminal for a duplicate of a previous receipt.
-
-```kotlin
-lifecycleScope.launch {
-    // Reprint the last receipt:
-    val result = client.printDuplicate(registerId = "01", cashierId = "00001")
-
-    // Or reprint a specific transaction by STAN:
-    val result = client.printDuplicate(
-        registerId = "01",
-        cashierId  = "00001",
-        stan       = "444491"
-    )
-
-    if (result.success) {
+    if (result.isApproved()) {
+        // Keep these three values: a void needs them
+        val stan = result.stan!!
+        val sequence = result.sequence!!
+        val amountCentimes = TlvProtocol.toCentimes(amount)   // 15000
         result.merchantReceipt?.let { printReceipt(it) }
+        result.customerReceipt?.let { printReceipt(it) }
     } else {
-        println("Duplicate failed: ${result.error}")
+        // Declined by the card network, the issuer or the terminal
+        println("Declined [${result.responseCode}]: ${result.error}")
+        result.merchantReceipt?.let { printReceipt(it) }   // decline ticket, if any
+    }
+} catch (e: NapsError) {
+    // No usable answer from the terminal
+    when (e.code) {
+        ErrorCode.CONNECTION_FAILED -> println("Terminal unreachable: ${e.message}")
+        ErrorCode.TIMEOUT -> println("Terminal did not answer in time")
+        else -> println("Protocol error: ${e.message}")
     }
 }
 ```
 
+(`printReceipt` is your own function: see [Receipts](#receipts).)
+
+**`PaymentResult` fields**
+
+| Field | Description |
+|---|---|
+| `success`, `responseCode` | `isApproved()` = `success && responseCode == "000"` |
+| `stan` | System Trace Audit Number — needed to void or reprint |
+| `sequence` | NS used — needed to void |
+| `maskedCardNumber` | e.g. `516794******3315` (also kept on declines) |
+| `cardExpiry` | `YYMM`; `getFormattedExpiry()` gives `MM/YY` |
+| `cardholderName`, `entryMode`, `authNumber`, `ncai` | As returned by the terminal |
+| `transactionDate`, `transactionTime` | `DDMMYYYY`, `HHMMSS` |
+| `merchantReceipt`, `customerReceipt` | `Receipt?` |
+| `error` | Human-readable reason when not approved |
+
 ---
 
-## Settlement (end of day)
+## How a void works
 
-**TM=010** sends batch totals to the NAPS server. Run once at end of business day.  
-The terminal must be idle (not waiting for a card) and referencing must have run.
+A void (cancellation) is also two phases on one connection. `cancelPayment` runs both.
+
+```mermaid
+sequenceDiagram
+    participant App as Your app (SDK)
+    participant T as Terminal
+    App->>T: TM 003 Cancellation (STAN, amount, sequence)
+    T-->>App: TM 103 (CR 000 = transaction found; amount, merchant receipt)
+    App->>T: TM 004 Cancellation confirmation (same sequence in NS, amount from TM 103)
+    Note over T: reversal executed here
+    T-->>App: TM 104 (CR = final outcome)
+```
+
+TM 103 with CR = 000 only means **the transaction was found**. The reversal happens on TM 004,
+so only TM 104 tells you whether it worked. The SDK maps the outcome as follows:
+
+| Outcome | When | `success` | `pending` |
+|---|---|---|---|
+| **Success** | TM 104 CR = `000` or `480` | `true` | `false` |
+| **Pending** | TM 104 CR = `995`, **or no TM 104 at all** (timeout or connection lost after TM 004) | `false` | `true` |
+| **Failure** | TM 103 CR ≠ 000 (e.g. 302 not found, 482 already cancelled), or any other TM 104 CR | `false` | `false` |
+
+**Pending means the reversal may or may not have run.** CR 995 is "Server processing error" in
+the spec, but has been seen on voids that did go through on a live v5.4.4 terminal. A pending
+result keeps the STAN of the transaction and the TM 103 merchant receipt. Never record it as
+voided. Reprint the receipt for that STAN with `printDuplicate` and check it first.
+
+You need the `stan` and `sequence` from the approved `PaymentResult`, and the amount in
+centimes (required by NapsPay v5.4.4+):
 
 ```kotlin
-lifecycleScope.launch {
-    val result = client.settlement(registerId = "01", cashierId = "00001")
-
-    if (result.success) {
-        println("Settlement done — ${result.date} ${result.time}")
-    } else {
-        println("Settlement failed: ${result.error}")
+val void = client.cancelPayment(
+    stan = stan,
+    registerId = "01",
+    cashierId = "00001",
+    sequence = sequence,
+    amountCentimes = amountCentimes
+)
+when {
+    void.success -> {
+        println("Voided (CR ${void.responseCode}), STAN ${void.stan}")
+        void.merchantReceipt?.let { printReceipt(it) }
     }
-}
-```
-
----
-
-## Reset the terminal
-
-**TM=012** sends the terminal back to idle ("Attente Caisse").  
-Use when the terminal is stuck waiting for a card tap after an interrupted payment.
-
-```kotlin
-lifecycleScope.launch {
-    val result = client.resetPinPad(registerId = "01", cashierId = "00001")
-    println(if (result.success) "Terminal reset — ready" else "Reset failed: ${result.error}")
-}
-```
-
----
-
-## Receipt API
-
-```kotlin
-// Plain text — for logging or email body
-val text: String = receipt.toPlainText()
-
-// Formatted text with alignment markers — for debugging
-val formatted: String = receipt.toFormattedText()
-// e.g. "[B][C]TKpay" = bold, centered
-
-// Line-by-line — for Sunmi thermal printer
-receipt.lines.forEach { line ->
-    when (line.alignment) {
-        Alignment.CENTER -> sunmiPrinter.printTextWithAlign(line.text, ALIGN_CENTER)
-        Alignment.RIGHT  -> sunmiPrinter.printTextWithAlign(line.text, ALIGN_RIGHT)
-        Alignment.LEFT   -> sunmiPrinter.printTextWithAlign(line.text, ALIGN_LEFT)
+    void.pending -> {
+        // Outcome unknown: the reversal may or may not have run.
+        // Do NOT mark the sale as voided. Reprint the receipt for this STAN
+        // and check it before doing anything else.
+        println("Void unconfirmed (CR '${void.responseCode}'), checking STAN ${void.stan}")
+        val dup = client.printDuplicate("01", "00001", stan = void.stan)
+        dup.merchantReceipt?.let { printReceipt(it) }
     }
+    else -> println("Void refused [${void.responseCode}]: ${void.error}")
 }
 ```
 
-**`ReceiptLine` fields:**
+`cancelPayment` never throws. Errors before TM 004 is sent come back as a failure with
+`responseCode = ""` and the exception message in `error`.
 
-| Field | Type | Description |
+---
+
+## Other operations
+
+All of these open a connection, send one request, read one reply and close. None of them
+throws: on any error they return `success = false` with `error` set.
+
+**Connection test** — opens a TCP socket only, no protocol message:
+
+```kotlin
+val reachable: Boolean = client.testConnection()
+```
+
+**Network test (TM 009)** — checks the whole till → terminal → NAPS server chain:
+
+```kotlin
+val net = client.networkTest("01", "00001")
+println(if (net.success) "Network OK (${net.rttMs} ms)" else "Network test failed: ${net.error}")
+```
+
+**Referencing (TM 013)** — loads the terminal's parameter set. Run it once before the first
+payment on a new terminal. `tide` picks the set: `"01"` merchant (default) or `"02"` recharge.
+
+```kotlin
+val ref = client.referencing("01", "00001")                      // merchant set "01"
+val recharge = client.referencing("01", "00001", TlvProtocol.Tide.RECHARGE)
+if (ref.success) ref.receipt?.let { printReceipt(it) }
+```
+
+**Duplicate receipt (TM 008)** — reprints the last transaction, or a given STAN:
+
+```kotlin
+val dup = client.printDuplicate("01", "00001")                   // last transaction
+dup.merchantReceipt?.let { printReceipt(it) }
+```
+
+**Totals (TM 010)** — running batch totals, returned as a receipt:
+
+```kotlin
+val totals = client.totals("01", "00001")
+totals.receipt?.let { printReceipt(it) }
+```
+
+**Settlement (TM 010)** — end-of-day batch transfer. The terminal must be idle.
+
+```kotlin
+val settlement = client.settlement("01", "00001")
+println(if (settlement.success) "Settled ${settlement.date} ${settlement.time}" else "Settlement failed: ${settlement.error}")
+```
+
+**Reset PIN pad (TM 012)**:
+
+```kotlin
+val reset = client.resetPinPad("01", "00001")
+println(if (reset.success) "PIN pad reset" else "Reset failed: ${reset.error}")
+```
+
+| Method | TM | Returns |
 |---|---|---|
-| `lineNumber` | `String` | Sequential line number |
-| `text` | `String` | Line content |
-| `bold` | `Boolean` | Print in bold |
-| `alignment` | `Alignment` | `LEFT`, `CENTER`, or `RIGHT` |
+| `processPayment(request)` | 001 → 002 | `PaymentResult` (throws `NapsError`) |
+| `cancelPayment(stan, registerId, cashierId, sequence, amountCentimes?)` | 003 → 004 | `CancellationResult` |
+| `printDuplicate(registerId, cashierId, stan?)` | 008 | `DuplicateReceiptResult` |
+| `networkTest(registerId, cashierId)` | 009 | `NetworkTestResult` |
+| `totals(registerId, cashierId)` | 010 | `TotalsResult` |
+| `settlement(registerId, cashierId)` | 010 | `SettlementResult` |
+| `resetPinPad(registerId, cashierId)` | 012 | `ResetResult` |
+| `referencing(registerId, cashierId, tide = "01")` | 013 | `ReferencingResult` |
+| `testConnection()` | — | `Boolean` |
 
-Receipt format: **58 mm / 32 characters wide**.
+---
+
+## Receipts
+
+The terminal sends receipts in the DP field (tag 010) as print lines. Each line has a number,
+a style (`S` simple / `G` bold) and an alignment (`G` left / `C` centre / `D` right). Lines are
+separated by `*` and the block ends with `?` (spec §5). The SDK parses this into a `Receipt`:
+
+```kotlin
+println(receipt.toPlainText())        // one line per print line
+println(receipt.toFormattedText())    // e.g. "[B][C]TKpay" = bold, centred
+
+for (line in receipt.lines) {
+    val align = when (line.alignment) {
+        Alignment.LEFT -> "L"
+        Alignment.CENTER -> "C"
+        Alignment.RIGHT -> "R"
+    }
+    println("$align ${if (line.bold) "B" else "-"} ${line.text}")
+}
+```
+
+Send each `line.text` to your printer with its `bold` and `alignment`. Terminal receipts are
+formatted for narrow (58 mm) paper. The first centred line containing "Naps" is replaced by a
+bold "TKPAY" line followed by "Powered by NAPS".
+
+Where receipts appear: `PaymentResult.merchantReceipt` / `customerReceipt`,
+`CancellationResult.merchantReceipt` (TM 103), `DuplicateReceiptResult.merchantReceipt`,
+`TotalsResult.receipt`, `ReferencingResult.receipt`.
+
+---
+
+## PAN masking and data sent by the SDK
+
+- **PAN masking.** The card number (tag 007) is masked as soon as a reply is parsed, keeping the
+  first 6 and last 4 digits: `5167940123453315` → `516794******3315`. Any 16-digit number inside
+  receipt text is masked the same way. The full PAN is never returned by the SDK.
+- **No storage.** The SDK has no code that writes to disk or `SharedPreferences`. Its log lines
+  contain no card data.
+- **Gateway notification.** After every `processPayment` call (approved or declined), the SDK
+  sends a background `POST` to `https://api.tkpay.ma/v1/transactions/notify`. It contains the
+  amount, response code, STAN, authorization number, masked card number, expiry, entry mode,
+  cardholder name, NCAI, register and cashier ids, sequence, transaction date and time, success
+  flag, error message, SDK version and platform. The endpoint is fixed. A failure never affects
+  the payment result. The other operations send nothing.
 
 ---
 
 ## Response codes
 
-The CR (013) response code is mapped to a human-readable message by
-`TlvProtocol.describeResponse(code)`. `TlvProtocol.isApproved(code)` returns
-`true` for the approved set `{000, 001, 003, 007}`. Common codes (full table in
-`TlvProtocol.RESPONSE_CODES`, per NAPS TLV v2 §6):
+Every reply carries a response code (CR, tag 013). `000` means success. The approval set is
+`000`, `001`, `003`, `007`. The full table from spec §6 is in
+[`TlvProtocol.RESPONSE_CODES`](naps-sdk/src/main/java/ma/tkpay/naps/protocol/TlvProtocol.kt):
 
-| Code | Meaning |
-|---|---|
-| `000` | Approved |
-| `001` | Approved with identification |
-| `003` | Approved (VIP) |
-| `007` | Approved, microchip update required |
-| `100` | Do not honour |
-| `101` | Card expired |
-| `102` | Fraud suspected |
-| `106` | Allowed PIN tries exceeded |
-| `116` | Insufficient funds |
-| `117` | Incorrect PIN |
-| `118` | Card not registered |
-| `120` | Transaction not permitted at terminal |
-| `121` | Withdrawal limit exceeded |
-| `183` | Invalid CVV |
-| `280` | Alternative amount cancelled |
-| `302` | Record not found on file |
-| `307` | Format error |
-| `480` | Reversal accepted |
-| `482` | Transaction already cancelled |
-| `909` | System failure |
-| `911` | Issuer did not respond in time |
-| `912` | Card issuer unavailable |
-| `995` | Server processing error |
+```kotlin
+TlvProtocol.describeResponse("116")   // "Insufficient funds"
+TlvProtocol.isApproved("000")         // true (approval set: 000, 001, 003, 007)
+TlvProtocol.RESPONSE_CODES            // the full table, Map<String, String>
+```
+
+Common ones: `100` do not honour, `116` insufficient funds, `117` incorrect PIN, `302` record
+not found, `307` format error, `480` reversal accepted, `482` already cancelled, `909` system
+failure, `995` server processing error.
 
 ---
 
-## Full API reference
+## Errors and timeouts
 
-All methods are `suspend` — call from a coroutine scope (e.g. `lifecycleScope.launch`).
+**Who throws.** Only `processPayment` throws a `NapsError` (`e.code` is an `ErrorCode`), when
+it gets no usable reply:
 
-| Method | TM | Description |
-|---|---|---|
-| `processPayment(request)` | 001 / 002 | Full two-phase payment |
-| `referencing(registerId, cashierId, tide = "01")` | 013 | Sync merchant config — run once before first payment. `tide` (020) picks the parameter set: `TlvProtocol.Tide.MERCHANT` ("01") or `RECHARGE` ("02") |
-| `networkTest(registerId, cashierId)` | 009 | Protocol-level health check with RTT |
-| `cancelPayment(stan, registerId, cashierId, sequence, amountCentimes?)` | 003 / 004 | Void last approved transaction. Pass `amountCentimes` (required by NapsPay v5.4.4+) |
-| `printDuplicate(registerId, cashierId, stan?)` | 008 | Reprint last or specific receipt |
-| `settlement(registerId, cashierId)` | 010 | End-of-day batch settlement |
-| `totals(registerId, cashierId)` | 010 | Running batch totals report (returns the totals receipt) |
-| `resetPinPad(registerId, cashierId)` | 012 | Reset terminal to idle |
-| `testConnection()` | — | TCP-only socket test (no TLV sent) |
+| `ErrorCode` | Cause |
+|---|---|
+| `CONNECTION_FAILED` | Socket could not be opened or broke; no host for TCP; USB permission denied |
+| `TIMEOUT` | No reply within the timeout for that step |
+| `INVALID_RESPONSE` | Empty reply, connection closed before a reply, missing CR / STAN / NS, or a reply over 64 KB without a terminator |
 
-Targets **NapsPay v5.4.4** (NAPS TLV v2). Management frames (TM=008/009/010/012/013)
-carry a sequence number (NS/004). `BinaryTlvProtocol` exposes the binary
-`tag(1) + length(2 BE) + value` framing used by some Sunmi deployments.
+A *declined* payment is not an exception: it is a `PaymentResult` with `success = false`.
+Every other method returns a result object with `success = false` and `error` set, and never
+throws. `ErrorCode` also lists `PAYMENT_DECLINED`, `TERMINAL_DOWN`, `TRANSACTION_NOT_FOUND`,
+`ALREADY_CANCELLED` and `UNKNOWN_ERROR`. The client does not currently raise them.
 
-### `NapsConfig` parameters
+**Timeouts as implemented**
+
+| Step | Timeout |
+|---|---|
+| TCP connect | `timeout` (default 120 s) |
+| TM 001, 003, 008, 010, 013 reply | `timeout` (default 120 s) |
+| TM 002 and TM 004 reply | `confirmationTimeout` (default 40 s) |
+| TM 009 (network test), TM 012 (reset) reply | fixed 10 s |
+
+A reply is complete when it ends with `!` (protocol v2) or `?` (v1). The terminal sends no
+terminator on some replies (e.g. TM 103/104), so a reply also ends after 1 s without new data.
+
+---
+
+## Configuration
+
+```kotlin
+val tcp = NapsConfig(
+    host = "192.168.1.50",       // terminal IP on the shop Wi-Fi
+    port = 4444,                 // default
+    timeout = 120_000,           // ms, connect + Phase 1 (default 2 min)
+    confirmationTimeout = 40_000 // ms, TM 002 / TM 004 replies (default 40 s)
+)
+val client = NapsPayClient(tcp)
+
+// Ingenico over USB: needs a Context for the USB stack
+val usbClient = NapsPayClient(NapsConfig(transport = TransportType.USB_SERIAL), context)
+```
 
 | Parameter | Default | Description |
 |---|---|---|
-| `host` | `null` | Terminal IP address. **Required for TCP**; unused for USB serial. |
-| `port` | `4444` | NAPS M2M TCP port |
-| `timeout` | `120_000` ms | Payment timeout (2 min for customer to tap) |
-| `confirmationTimeout` | `40_000` ms | Phase 2 hard deadline (NAPS protocol limit) |
-| `transport` | `TransportType.TCP_SOCKET` | `TCP_SOCKET` (Sunmi) or `USB_SERIAL` (Ingenico Lane/3000). |
-| `serialPortName` | `null` | USB serial device name. `null` = auto-discover by vendor id `0x0B00`. |
-| `serialBaudRate` | `115200` | USB serial baud rate. |
-| `protocolVersion` | `null` | NAPS TLV version. `null` resolves per transport (USB serial → v1 `'?'`, TCP → v2 `'!'`) via `resolveProtocolVersion()`; set explicitly to override. The read loop tolerates both terminators. |
+| `host` | `null` | Terminal IP. Required for TCP. |
+| `port` | `4444` | TCP port |
+| `timeout` | `120000` ms | Connect and Phase 1 read |
+| `confirmationTimeout` | `40000` ms | TM 002 / TM 004 reads |
+| `transport` | `TCP_SOCKET` | `TCP_SOCKET` or `USB_SERIAL` |
+| `serialPortName` | `null` | USB device name; `null` = auto-discover by vendor id `0x0B00`, then first CDC-ACM device |
+| `serialBaudRate` | `115200` | USB serial speed |
+| `protocolVersion` | `null` | `V2` (`!`) or `V1` (`?`); `null` = V2 for TCP, V1 for USB. Both terminators are always accepted. |
+
+**USB (Ingenico)** — uses Android USB-host mode via
+[usb-serial-for-android](https://github.com/mik3y/usb-serial-for-android). On `connect()` the
+SDK asks for the USB permission if the app does not hold it yet; a denial is a
+`CONNECTION_FAILED`. `UsbSerialConnection.listDevices(context)` lists candidates. This path has
+unit tests for device selection only and has **not** been run on real hardware.
 
 ---
 
-## Project structure
+## Testing with the emulator
 
-```
-tkpay-sdk-pos-naps-android/
-├── naps-sdk/                                   # SDK library module
-│   └── src/main/java/ma/tkpay/naps/
-│       ├── NapsPayClient.kt                    # Entry point — all suspend funs
-│       ├── config/
-│       │   └── NapsConfig.kt                  # Host, port, timeouts, transport, serial
-│       ├── connection/
-│       │   ├── NapsTransport.kt               # Transport interface (TCP + USB serial)
-│       │   ├── NapsConnection.kt              # TCP socket lifecycle + send/receive
-│       │   ├── UsbSerialConnection.kt         # USB-host CDC-ACM (Ingenico Lane/3000)
-│       │   └── UsbSerialDiscovery.kt          # VID 0x0B00 / CDC-ACM selection (pure)
-│       ├── models/
-│       │   ├── PaymentRequest.kt
-│       │   ├── PaymentResult.kt
-│       │   ├── SettlementResult.kt
-│       │   ├── CancellationResult.kt
-│       │   ├── NetworkTestResult.kt
-│       │   ├── DuplicateReceiptResult.kt
-│       │   ├── ResetResult.kt
-│       │   ├── ReferencingResult.kt
-│       │   ├── Receipt.kt                     # Lines, alignment, bold
-│       │   └── NapsError.kt                   # ErrorCode enum + factory methods
-│       ├── protocol/
-│       │   ├── TlvProtocol.kt                 # TLV builders + parser + PAN masking
-│       │   └── ReceiptParser.kt               # DP tag → Receipt lines
-│       └── gateway/
-│           └── GatewayNotifier.kt             # Fire-and-forget TKpay gateway ping
-├── sample-app/                                # Demo app — all 8 message types
-└── README.md
-```
-
----
-
-## Building
+The [emulator](https://github.com/Belkouche/tkpay-naps-emulator) plays the terminal over TCP.
+It needs Python 3 and nothing else.
 
 ```bash
-# Build the SDK AAR
-./gradlew :naps-sdk:build
-
-# Build and install the sample app
-./gradlew :sample-app:assembleDebug
-adb install sample-app/build/outputs/apk/debug/sample-app-debug.apk
+python3 /Users/belkouche/Projects/tkpay/tkpay-naps-emulator/naps_emulator.py --port 4444
 ```
 
+Point the SDK at `127.0.0.1:4444` (or the computer's LAN IP from a device). `--mode` picks the
+behaviour; one mode per emulator process:
+
+| `--mode` | What the terminal does |
+|---|---|
+| `approve` (default) | Approves everything. Add `--strict-confirm` to reject a TM 002 whose echoed amount/PAN differ (CR 307). |
+| `decline` | Declines TM 001 with CR 100 |
+| `error --code 116` | Declines TM 001 with the given code (number or name, e.g. `insufficient_funds`) |
+| `confirm_error --code 482` | Approves TM 001, refuses TM 002 with the code |
+| `timeout` | Never answers TM 001 |
+| `no_confirm` | Never answers TM 002 |
+| `void_refuse --code 482` | Refuses the void at TM 103 |
+| `void_480` | TM 104 with CR 480 (success) |
+| `void_995` | TM 104 with CR 995 (pending) |
+| `void_no_confirm` | Never answers TM 004 (pending) |
+
+`--protocol v1` switches the terminator to `?`; `--debug` prints every field. The void modes
+need an emulator version with two-phase void support (commit `5cc8536` or later).
+
+**This repo's tests**
+
+```bash
+# Build, lint and unit tests (no emulator needed; emulator tests are skipped)
+./gradlew :naps-sdk:build
+
+# Integration tests: start the emulator in a mode, then run the tests for that mode
+python3 naps_emulator.py --port 4444 --strict-confirm
+NAPS_EMULATOR_PORT=4444 NAPS_EMULATOR_MODE=approve \
+  ./gradlew :naps-sdk:testDebugUnitTest --tests '*EmulatorIntegrationTest' --rerun
+
+# Quickstart example and README samples, emulator in approve mode
+NAPS_PORT=4444 ./gradlew :naps-sdk:testDebugUnitTest --tests '*QuickstartExampleTest' --rerun -i
+NAPS_EMULATOR_PORT=4444 ./gradlew :naps-sdk:testDebugUnitTest --tests '*ReadmeExamplesTest' --rerun -i
+```
+
+`NAPS_EMULATOR_MODE` accepts `approve`, `decline`, `error` (`--code 116`), `confirm_error`
+(`--code 482`), `no_confirm`, `void_480`, `void_995`, `void_no_confirm` and `void_refuse`
+(`--code 482`). Keep `--rerun`: Gradle does not see environment variables as inputs and would
+otherwise skip the tests as up to date. The README code samples live in
+`naps-sdk/src/test/java/ma/tkpay/naps/ReadmeExamples.kt`, so the build compiles them.
+
 ---
 
-## Requirements
+## Troubleshooting
 
-- Android 5.0+ (API 21)
-- Kotlin 1.9+
-- `kotlinx-coroutines`
+**`CONNECTION_FAILED` / connection refused.** Nothing is listening on `host:port`. Check that
+NapsPay is running and waiting for the till, the IP is the terminal's current Wi-Fi address,
+the till and the terminal are on the same network, and the port is 4444. With the emulator,
+check that it is running on the port you configured.
+
+**`TIMEOUT` on a payment.** On TM 001, the customer did not complete the card step within
+`timeout`, or the terminal was busy. On TM 002, the terminal did not confirm within
+`confirmationTimeout`. Treat an unconfirmed payment as **not** approved and check it with
+`printDuplicate` before charging again.
+
+**CR 909 — system failure.** The terminal or the NAPS server is down. On a void, the live
+v5.4.4 terminal also returns 909 when TM 004 lacks the amount: always pass `amountCentimes`
+to `cancelPayment`.
+
+**CR 302 — record not found.** On a void, the STAN does not match a transaction on the
+terminal. On a payment confirmation, the terminal no longer has the sale (it reverses it).
+
+**CR 482 — already cancelled.** The transaction was already voided. If an earlier void came
+back pending, this tells you it went through.
+
+**Void is `pending`.** See [How a void works](#how-a-void-works). Do not mark the sale as
+voided. Reprint the receipt for `void.stan` and check it.
+
+**Receipt has only one line.** Fixed in 1.4.0: older versions did not handle the `*` line
+separator.
+
+**Sample app.** `sample-app` does not currently compile: `MainActivity` references buttons
+missing from its layout. Use `examples/quickstart` instead.
 
 ---
 
-## Security
+## Changelog
 
-- **PAN masking** — card number exposed only as `516794******3315`. Full PAN never returned.
-- **No persistence** — the SDK never writes sensitive data to disk, SharedPreferences, or logs.
-- **PCI DSS** — compliant with payment card industry data security standards.
-
----
+See [CHANGELOG.md](CHANGELOG.md). 1.4.0 brings the SDK in line with NapsPay v5.4.4 and the
+TLV spec v2.0 (two-phase void with pending outcome, refused confirmations, receipt parsing,
+management frames).
 
 ## License
 
