@@ -483,6 +483,9 @@ class NapsPayClient(
         val merchantReceipt = cancelResponse[TlvProtocol.Tags.DP]?.let {
             ReceiptParser.parse(it, ReceiptType.MERCHANT)
         }
+        val customerReceipt = confirmResponse?.get(TlvProtocol.Tags.DP)?.let {
+            ReceiptParser.parse(it, ReceiptType.CUSTOMER)
+        }
         val cr = confirmResponse?.get(TlvProtocol.Tags.CR) ?: ""
 
         return when {
@@ -498,7 +501,8 @@ class NapsPayClient(
                 success = true,
                 responseCode = cr,
                 stan = confirmResponse[TlvProtocol.Tags.STAN] ?: originalStan,
-                merchantReceipt = merchantReceipt
+                merchantReceipt = merchantReceipt,
+                customerReceipt = customerReceipt
             )
             cr == "995" -> CancellationResult(
                 success = false,
@@ -506,14 +510,16 @@ class NapsPayClient(
                 stan = originalStan,
                 error = "${TlvProtocol.describeResponse(cr)} (995) — void unconfirmed, verify with printDuplicate(stan)",
                 pending = true,
-                merchantReceipt = merchantReceipt
+                merchantReceipt = merchantReceipt,
+                customerReceipt = customerReceipt
             )
             else -> CancellationResult(
                 success = false,
                 responseCode = cr,
                 stan = confirmResponse[TlvProtocol.Tags.STAN] ?: originalStan,
                 error = "Cancellation failed with code: $cr",
-                merchantReceipt = merchantReceipt
+                merchantReceipt = merchantReceipt,
+                customerReceipt = customerReceipt
             )
         }
     }

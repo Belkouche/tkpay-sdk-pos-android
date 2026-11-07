@@ -43,4 +43,34 @@ class ReceiptParserTest {
         assertEquals(specDp, fields[TlvProtocol.Tags.DP])
         assertEquals("000", fields[TlvProtocol.Tags.CR])
     }
+
+    // --- spec §5: never drop, merge, blank or invent lines ---
+
+    @Test
+    fun keepsLinesWithEmptyTextInOrder() {
+        val dp = line("01", "S", "G", "A") + "*" + line("02", "S", "G", "") + "*" + line("03", "S", "G", "B") + "?"
+        val receipt = ReceiptParser.parse(dp, ReceiptType.MERCHANT)
+        assertEquals(listOf("01", "02", "03"), receipt.lines.map { it.lineNumber })
+        assertEquals(listOf("A", "", "B"), receipt.lines.map { it.text })
+    }
+
+    @Test
+    fun addsNoTextOfItsOwn() {
+        val dp = line("01", "G", "C", "NAPS PAY") + "*" + line("02", "S", "G", "Copie Client") + "?"
+        val receipt = ReceiptParser.parse(dp, ReceiptType.CUSTOMER)
+        assertEquals(listOf("NAPS PAY", "Copie Client"), receipt.lines.map { it.text })
+    }
+
+    @Test
+    fun masksFullPanOfAnyCardLengthWithoutBlankingTheLine() {
+        val dp = line("01", "S", "G", "CARTE 4111111111111111") + "*" +
+            line("02", "S", "G", "5167940123453") + "*" +              // 13 digits
+            line("03", "S", "G", "6011000990139424127") + "*" +        // 19 digits
+            line("04", "S", "G", "MID 000000000001") + "?"             // 12 digits: not a PAN
+        val texts = ReceiptParser.parse(dp, ReceiptType.MERCHANT).lines.map { it.text }
+        assertEquals(
+            listOf("CARTE 411111******1111", "516794***3453", "601100*********4127", "MID 000000000001"),
+            texts
+        )
+    }
 }

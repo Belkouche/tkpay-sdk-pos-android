@@ -260,7 +260,8 @@ val void = client.cancelPayment(
 when {
     void.success -> {
         println("Voided (CR ${void.responseCode}), STAN ${void.stan}")
-        void.merchantReceipt?.let { printReceipt(it) }
+        void.merchantReceipt?.let { printReceipt(it) }   // TM 103, "Copie Commercant"
+        void.customerReceipt?.let { printReceipt(it) }   // TM 104, "Copie Client"
     }
     void.pending -> {
         // Outcome unknown: the reversal may or may not have run.
@@ -350,9 +351,36 @@ println(if (reset.success) "PIN pad reset" else "Reset failed: ${reset.error}")
 
 ## Receipts
 
-The terminal sends receipts in the DP field (tag 010) as print lines. Each line has a number,
-a style (`S` simple / `G` bold) and an alignment (`G` left / `C` centre / `D` right). Lines are
-separated by `*` and the block ends with `?` (spec §5). The SDK parses this into a `Receipt`:
+The receipt is the DP block (tag 010) the terminal sends: a certified layout the SDK passes
+through unchanged. Each print line has a number (DP1, tag 030), a style (DP2, 031: `S` simple
+/ `G` bold), an alignment (DP3, 032: `G` left / `C` centre / `D` right) and its text (DP4, 033).
+Lines are separated by `*` and the block ends with `?` (spec §5).
+
+The SDK keeps **every** line in order, including lines with empty text. It adds no text of its
+own. The only change it ever makes is masking a full card number (13 to 19 digits) if one
+appears in a line: first 6 and last 4 digits kept, the line itself kept.
+
+**Which copy comes from where**
+
+| Operation | Merchant copy | Customer copy |
+|---|---|---|
+| Payment | `PaymentResult.merchantReceipt` — TM 101, ends with "Copie Commercant" | `PaymentResult.customerReceipt` — TM 102, ends with "Copie Client" |
+| Void | `CancellationResult.merchantReceipt` — TM 103 (kept on pending voids) | `CancellationResult.customerReceipt` — TM 104 |
+| Declined payment | `PaymentResult.merchantReceipt` — the decline ticket, if the terminal sends one | — |
+| Duplicate (TM 108) | `DuplicateReceiptResult.merchantReceipt` | — |
+| Totals (TM 110) | `TotalsResult.receipt` | — |
+| Referencing (TM 113) | `ReferencingResult.receipt` | — |
+
+```kotlin
+val merchantCopy: Receipt? = payment.merchantReceipt   // TM 101 — ends with "Copie Commercant"
+val customerCopy: Receipt? = payment.customerReceipt   // TM 102 — ends with "Copie Client"
+val voidMerchant: Receipt? = void.merchantReceipt      // TM 103
+val voidCustomer: Receipt? = void.customerReceipt      // TM 104
+```
+
+**Printing.** `toPlainText()` returns the lines joined with `\n`, exactly as sent.
+`toFormattedText()` prefixes each line with its style and alignment. To drive a printer, walk
+`lines` and use each line's `bold` and `alignment`:
 
 ```kotlin
 println(receipt.toPlainText())        // one line per print line
@@ -368,21 +396,41 @@ for (line in receipt.lines) {
 }
 ```
 
-Send each `line.text` to your printer with its `bold` and `alignment`. Terminal receipts are
-formatted for narrow (58 mm) paper. The first centred line containing "Naps" is replaced by a
-bold "TKPAY" line followed by "Powered by NAPS".
+`ReceiptLine` fields: `lineNumber` (DP1, as sent), `text` (DP4), `bold` (DP2 = `G`),
+`alignment` (DP3). `Receipt.type` is `MERCHANT` or `CUSTOMER`.
 
-Where receipts appear: `PaymentResult.merchantReceipt` / `customerReceipt`,
-`CancellationResult.merchantReceipt` (TM 103), `DuplicateReceiptResult.merchantReceipt`,
-`TotalsResult.receipt`, `ReferencingResult.receipt`.
+Customer copy of a 10.00 MAD payment from the emulator (`toPlainText()`):
+
+```
+TKpay
+--------------------------------
+07/11/2026 00:16:42
+TKPAY DEMO
+CASABLANCA
+--------------------------------
+VISA
+516794******3315
+Terminal: 00000001
+Transaction: 489688
+Autorisation: 963962
+STAN: 489688
+--------------------------------
+MONTANT: 10.00 MAD
+--------------------------------
+DEBIT
+Copie Client
+```
+
+The merchant copy is the same with "Copie Commercant" as its last line. The void copies have
+"ANNULATION" in place of "DEBIT".
 
 ---
 
 ## PAN masking and data sent by the SDK
 
 - **PAN masking.** The card number (tag 007) is masked as soon as a reply is parsed, keeping the
-  first 6 and last 4 digits: `5167940123453315` → `516794******3315`. Any 16-digit number inside
-  receipt text is masked the same way. The full PAN is never returned by the SDK.
+  first 6 and last 4 digits: `5167940123453315` → `516794******3315`. Any 13- to 19-digit number
+  inside receipt text is masked the same way. The full PAN is never returned by the SDK.
 - **No storage.** The SDK has no code that writes to disk or `SharedPreferences`. Its log lines
   contain no card data.
 - **Gateway notification.** After every `processPayment` call (approved or declined), the SDK
@@ -552,11 +600,11 @@ back pending, this tells you it went through.
 **Void is `pending`.** See [How a void works](#how-a-void-works). Do not mark the sale as
 voided. Reprint the receipt for `void.stan` and check it.
 
-**Receipt has only one line.** Fixed in 1.4.0: older versions did not handle the `*` line
-separator.
+**Receipt has only one line, or "Powered by NAPS" appears on it.** Fixed in 1.4.0: older
+versions did not handle the `*` line separator and added their own header and footer lines.
 
-**Sample app.** `sample-app` does not currently compile: `MainActivity` references buttons
-missing from its layout. Use `examples/quickstart` instead.
+**Sample app.** `sample-app` is a one-screen demo of every operation:
+`./gradlew :sample-app:assembleDebug`, then enter the terminal IP.
 
 ---
 

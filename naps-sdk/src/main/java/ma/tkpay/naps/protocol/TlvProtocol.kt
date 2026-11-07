@@ -490,10 +490,11 @@ object TlvProtocol {
     }
 
     /**
-     * Mask any 16-digit card numbers in text
+     * Mask any card number (13 to 19 consecutive digits) in text, keeping the
+     * first 6 and last 4 digits
      */
     fun maskCardNumbersInText(text: String): String {
-        val panPattern = Regex("\\b\\d{16}\\b")
+        val panPattern = Regex("\\b\\d{13,19}\\b")
         return panPattern.replace(text) { matchResult ->
             maskCardNumber(matchResult.value)
         }

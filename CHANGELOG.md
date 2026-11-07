@@ -45,6 +45,16 @@ All notable changes to the TKpay NAPS POS SDK (Android) are documented here.
   real terminal receipt came back with one line. `TlvProtocol.parse` now only treats
   `'!'`/`'?'` as the frame terminator at a field boundary, so the `'?'` inside the DP
   value no longer cuts off the fields after it.
+- **Receipts follow spec §5 exactly.** Every DP line is kept, in order, as sent, including
+  lines with empty text (they were dropped). The SDK no longer adds or replaces lines: the
+  "TKPAY" header substitution and the "Powered by NAPS" line are removed. Card numbers of 13 to
+  19 digits in receipt text are masked (was 16 only), and the line is kept. A new line number
+  also ends the previous line when no `'*'` separates them.
+- **Void customer copy.** New `CancellationResult.customerReceipt` carries the TM=104 DP
+  (customer copy). `merchantReceipt` stays the TM=103 DP, and pending voids keep it.
+- **Sample app** compiles again: the 6 missing buttons are back in the layout, and the void
+  passes the amount and shows pending voids. AGP 8.1.4 → 8.2.2, because 8.1.x fails `jlink` on
+  the JDK 21 bundled with current Android Studio.
 - **Confirmation refusal.** A Confirmation Response (TM=102) with CR≠000 (e.g. 302
   sale not found, 482 already cancelled; the terminal auto-reverses) is now a failed
   `PaymentResult`. Before, it was reported as `success = true`.

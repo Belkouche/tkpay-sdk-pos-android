@@ -18,19 +18,31 @@ object ReceiptParser {
 
     /**
      * Parse receipt data from DP tag value
+     *
+     * Spec §5: line groups are separated by '*' and '?' ends the block. Every
+     * line is kept, in order, as sent — including lines with empty text. The only
+     * change made to the text is masking a full PAN, should one ever appear.
      */
     fun parse(dpValue: String, type: ReceiptType): Receipt {
         val lines = mutableListOf<ReceiptLine>()
         var index = 0
-        var currentLine = ReceiptLine("", "", false, Alignment.LEFT)
+        var inLine = false
         var lineNumber = ""
         var format = "S"
         var alignment = "G"
         var content = ""
 
+        fun endLine() {
+            if (inLine) lines.add(createReceiptLine(lineNumber, content, format, alignment))
+            inLine = false
+            lineNumber = ""
+            format = "S"
+            alignment = "G"
+            content = ""
+        }
+
         while (index < dpValue.length) {
-            // Spec §5: line groups are separated by '*'; '?' ends the print lines
-            if (dpValue[index] == '*') { index++; continue }
+            if (dpValue[index] == '*') { endLine(); index++; continue }
             if (dpValue[index] == '?') break
 
             // Need at least 6 chars for tag + length
@@ -51,40 +63,24 @@ object ReceiptParser {
 
             when (tag) {
                 TlvProtocol.ReceiptTags.LINE_NUMBER -> {
-                    // New line starting
-                    if (lineNumber.isNotEmpty() && content.isNotEmpty()) {
-                        // Save previous line
-                        lines.add(createReceiptLine(lineNumber, content, format, alignment))
-                    }
+                    // A new line number without a '*' before it still starts a new line
+                    endLine()
                     lineNumber = value
-                    format = "S"
-                    alignment = "G"
-                    content = ""
                 }
-                TlvProtocol.ReceiptTags.FORMAT -> {
-                    format = value
-                }
-                TlvProtocol.ReceiptTags.ALIGNMENT -> {
-                    alignment = value
-                }
-                TlvProtocol.ReceiptTags.CONTENT -> {
-                    content = value
-                }
+                TlvProtocol.ReceiptTags.FORMAT -> format = value
+                TlvProtocol.ReceiptTags.ALIGNMENT -> alignment = value
+                TlvProtocol.ReceiptTags.CONTENT -> content = value
             }
+            inLine = true
 
             index += 6 + length
         }
 
         // Don't forget the last line
-        if (lineNumber.isNotEmpty() && content.isNotEmpty()) {
-            lines.add(createReceiptLine(lineNumber, content, format, alignment))
-        }
-
-        // Apply TKPAY branding
-        val brandedLines = applyBranding(lines)
+        endLine()
 
         // Mask any card numbers in receipt
-        val maskedLines = brandedLines.map { line ->
+        val maskedLines = lines.map { line ->
             line.copy(text = TlvProtocol.maskCardNumbersInText(line.text))
         }
 
@@ -114,47 +110,5 @@ object ReceiptParser {
             bold = bold,
             alignment = alignment
         )
-    }
-
-    /**
-     * Apply TKPAY branding to receipt
-     * Replace first "Naps" header with "TKPAY" and add "Powered by NAPS"
-     */
-    private fun applyBranding(lines: List<ReceiptLine>): List<ReceiptLine> {
-        val result = mutableListOf<ReceiptLine>()
-        var brandingApplied = false
-
-        for (line in lines) {
-            if (!brandingApplied &&
-                line.text.contains("Naps", ignoreCase = true) &&
-                line.alignment == Alignment.CENTER) {
-
-                // Replace with TKPAY header
-                result.add(
-                    ReceiptLine(
-                        lineNumber = line.lineNumber,
-                        text = "TKPAY",
-                        bold = true,
-                        alignment = Alignment.CENTER
-                    )
-                )
-
-                // Add "Powered by NAPS" below
-                result.add(
-                    ReceiptLine(
-                        lineNumber = (line.lineNumber.toIntOrNull()?.plus(1)?.toString()?.padStart(2, '0')) ?: "00",
-                        text = "Powered by NAPS",
-                        bold = false,
-                        alignment = Alignment.CENTER
-                    )
-                )
-
-                brandingApplied = true
-            } else {
-                result.add(line)
-            }
-        }
-
-        return result
     }
 }

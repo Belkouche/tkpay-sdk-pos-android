@@ -4,9 +4,11 @@ import android.content.Context
 import ma.tkpay.naps.config.NapsConfig
 import ma.tkpay.naps.config.TransportType
 import ma.tkpay.naps.models.Alignment
+import ma.tkpay.naps.models.CancellationResult
 import ma.tkpay.naps.models.ErrorCode
 import ma.tkpay.naps.models.NapsError
 import ma.tkpay.naps.models.PaymentRequest
+import ma.tkpay.naps.models.PaymentResult
 import ma.tkpay.naps.models.Receipt
 import ma.tkpay.naps.protocol.TlvProtocol
 
@@ -63,7 +65,8 @@ internal object ReadmeExamples {
         when {
             void.success -> {
                 println("Voided (CR ${void.responseCode}), STAN ${void.stan}")
-                void.merchantReceipt?.let { printReceipt(it) }
+                void.merchantReceipt?.let { printReceipt(it) }   // TM 103, "Copie Commercant"
+                void.customerReceipt?.let { printReceipt(it) }   // TM 104, "Copie Client"
             }
             void.pending -> {
                 // Outcome unknown: the reversal may or may not have run.
@@ -99,6 +102,14 @@ internal object ReadmeExamples {
 
         val reset = client.resetPinPad("01", "00001")
         println(if (reset.success) "PIN pad reset" else "Reset failed: ${reset.error}")
+    }
+
+    // README: "Receipts"
+    fun copies(payment: PaymentResult, void: CancellationResult) {
+        val merchantCopy: Receipt? = payment.merchantReceipt   // TM 101 — ends with "Copie Commercant"
+        val customerCopy: Receipt? = payment.customerReceipt   // TM 102 — ends with "Copie Client"
+        val voidMerchant: Receipt? = void.merchantReceipt      // TM 103
+        val voidCustomer: Receipt? = void.customerReceipt      // TM 104
     }
 
     // README: "Receipts"

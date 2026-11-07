@@ -7,6 +7,7 @@ import ma.tkpay.naps.models.CancellationResult
 import ma.tkpay.naps.models.ErrorCode
 import ma.tkpay.naps.models.NapsError
 import ma.tkpay.naps.models.PaymentResult
+import ma.tkpay.naps.models.Receipt
 import ma.tkpay.naps.protocol.TlvProtocol
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -209,5 +210,89 @@ class EmulatorIntegrationTest {
         assertFalse(result.success)
         assertFalse(result.pending)
         assertEquals("482", result.responseCode)
+    }
+
+    // --- receipts (DP, spec §5): every line, in order, as the terminal sent it ---
+
+    /** Expected line → regex; `<DATE>` = dd/MM/yyyy HH:mm:ss, `<N>` = digits, the rest literal. */
+    private fun toRegex(line: String): Regex {
+        val sb = StringBuilder()
+        var last = 0
+        for (m in Regex("<DATE>|<N>").findAll(line)) {
+            sb.append(Regex.escape(line.substring(last, m.range.first)))
+            sb.append(if (m.value == "<DATE>") "\\d{2}/\\d{2}/\\d{4} \\d{2}:\\d{2}:\\d{2}" else "\\d+")
+            last = m.range.last + 1
+        }
+        sb.append(Regex.escape(line.substring(last)))
+        return Regex(sb.toString())
+    }
+
+    private fun assertReceipt(expected: List<String>, receipt: Receipt?) {
+        assertNotNull("receipt missing", receipt)
+        val actual = receipt!!.toPlainText().lines().map { it.trim() }
+        assertEquals("line count, got:\n${actual.joinToString("\n")}", expected.size, actual.size)
+        expected.zip(actual).forEachIndexed { i, (e, a) ->
+            assertTrue("line ${i + 1}: '$a' does not match '$e'", toRegex(e).matches(a))
+        }
+    }
+
+    private fun saleReceipt(amount: String, stan: String, operation: String, copy: String) = listOf(
+        "TKpay", SEP, "<DATE>", "TKPAY DEMO", "CASABLANCA", SEP,
+        "VISA", "516794******3315", "Terminal: 00000001",
+        "Transaction: $stan", "Autorisation: <N>", "STAN: $stan", SEP,
+        "MONTANT: $amount MAD", SEP, operation, copy
+    )
+
+    @Test
+    fun approve_paymentReceiptsMerchantAndCustomer() {
+        requireMode("approve")
+        val result = pay(10.00)
+        assertTrue(result.error, result.isApproved())
+        assertReceipt(saleReceipt("10.00", result.stan!!, "DEBIT", "Copie Commercant"), result.merchantReceipt)
+        assertReceipt(saleReceipt("10.00", result.stan!!, "DEBIT", "Copie Client"), result.customerReceipt)
+    }
+
+    @Test
+    fun approve_voidReceiptsMerchantAndCustomer() {
+        requireMode("approve")
+        val result = runBlocking { client.cancelPayment("000123", "01", "00001", "000045", 1000L) }
+        assertTrue(result.error, result.success)
+        // TM 103 copy is about the original sale (STAN 000123), TM 104 copy carries the void STAN
+        assertReceipt(saleReceipt("10.00", "000123", "ANNULATION", "Copie Commercant"), result.merchantReceipt)
+        assertReceipt(saleReceipt("10.00", result.stan!!, "ANNULATION", "Copie Client"), result.customerReceipt)
+    }
+
+    @Test
+    fun approve_duplicateTotalsAndReferencingReceipts() = runBlocking {
+        requireMode("approve")
+        assertReceipt(
+            saleReceipt("0.00", "<N>", "DEBIT", "Copie Commercant"),
+            client.printDuplicate("01", "00001").merchantReceipt
+        )
+        assertReceipt(
+            listOf("TKpay", SEP, "<DATE>", "TOTAUX DU JOUR", SEP, "VENTES:     0000000",
+                "ANNULATIONS:       0", SEP, "MONTANT:   0.00 MAD", SEP),
+            client.totals("01", "00001").receipt
+        )
+        assertReceipt(
+            listOf("TKpay", SEP, "<DATE>", "PARAMETRES MARCHAND", SEP, "MID: 000000000001",
+                "TID: 00000001", "DEVISE: MAD (504)", SEP, "TKPAY DEMO", "CASABLANCA", SEP),
+            client.referencing("01", "00001").receipt
+        )
+    }
+
+    @Test
+    fun decline_receiptAsSent() {
+        requireMode("decline")
+        val result = pay(10.00)
+        assertReceipt(
+            listOf("TKpay", SEP, "<DATE>", "TKPAY DEMO", "CASABLANCA", SEP, "Terminal: 00000001",
+                "STAN: ${result.stan}", SEP, "TRANSACTION REFUSEE", "Code: 100", SEP),
+            result.merchantReceipt
+        )
+    }
+
+    private companion object {
+        const val SEP = "--------------------------------"
     }
 }

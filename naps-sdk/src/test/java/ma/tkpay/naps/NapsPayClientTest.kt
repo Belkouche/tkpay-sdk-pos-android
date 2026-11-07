@@ -119,6 +119,16 @@ class NapsPayClientTest {
         mapOf(TlvProtocol.Tags.TM to "104", TlvProtocol.Tags.CR to cr, TlvProtocol.Tags.STAN to "000456")
 
     @Test
+    fun cancellation_keepsMerchantCopyFromTm103AndCustomerCopyFromTm104() {
+        val tm104 = confirm("000") + (TlvProtocol.Tags.DP to receipt("COPIE CLIENT"))
+        val result = client.buildCancellationResult("000123", cancelResponse, tm104)
+        assertTrue(result.merchantReceipt!!.toPlainText().contains("ANNULATION"))
+        assertEquals(ReceiptType.MERCHANT, result.merchantReceipt?.type)
+        assertTrue(result.customerReceipt!!.toPlainText().contains("COPIE CLIENT"))
+        assertEquals(ReceiptType.CUSTOMER, result.customerReceipt?.type)
+    }
+
+    @Test
     fun cancellation_cr000And480AreSuccess() {
         for (cr in listOf("000", "480")) {
             val result = client.buildCancellationResult("000123", cancelResponse, confirm(cr))

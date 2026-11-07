@@ -9,7 +9,8 @@ package ma.tkpay.naps.models
  * @property error Error message when not successful
  * @property pending The reversal may or may not have executed (no TM=104 reply, or CR=995).
  *   Never treat as success: verify with [ma.tkpay.naps.NapsPayClient.printDuplicate] by [stan].
- * @property merchantReceipt Receipt from the Cancellation Response (TM=103), if any
+ * @property merchantReceipt Merchant copy: DP of the Cancellation Response (TM=103), if any
+ * @property customerReceipt Customer copy: DP of the Cancellation Confirmation Response (TM=104), if any
  */
 data class CancellationResult(
     val success: Boolean,
@@ -17,5 +18,6 @@ data class CancellationResult(
     val stan: String? = null,
     val error: String? = null,
     val pending: Boolean = false,
-    val merchantReceipt: Receipt? = null
+    val merchantReceipt: Receipt? = null,
+    val customerReceipt: Receipt? = null
 )
