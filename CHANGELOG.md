@@ -2,6 +2,18 @@
 
 All notable changes to the TKpay NAPS POS SDK (Android) are documented here.
 
+## [1.4.2] - 2026-11-07
+
+- **Card numbers are masked on read** (first 6 + last 4 digits) and the full number is never
+  exposed or logged. Both transports now mask every reply as soon as it is read
+  (`TlvProtocol.maskFrame`, length-preserving), so the raw frame returned by the public
+  `sendAndReceive()` is masked too. Before, that frame was returned as received. In receipt and
+  other free text, any card-shaped run is masked: 13 or more digits that are adjacent or separated
+  by exactly one space, dash, dot, tab or non-breaking space. The first 6 and last 4 digits are
+  kept, and separators and line length are unchanged. Dates, times, amounts and numbers shorter
+  than 13 digits are untouched. NCAR (007) is always returned in the standard form
+  (`516794******3315`), however it arrives grouped.
+
 ## [1.4.1] - 2026-11-07
 
 - Repository hygiene only: stop tracking `sample-app/local.properties` and `sample-app/.gradle/`
@@ -51,15 +63,6 @@ All notable changes to the TKpay NAPS POS SDK (Android) are documented here.
   real terminal receipt came back with one line. `TlvProtocol.parse` now only treats
   `'!'`/`'?'` as the frame terminator at a field boundary, so the `'?'` inside the DP
   value no longer cuts off the fields after it.
-- **Card numbers are masked on read** (first 6 + last 4 digits) and the full number is never
-  exposed or logged. Both transports now mask every reply as soon as it is read
-  (`TlvProtocol.maskFrame`, length-preserving), so the raw frame returned by the public
-  `sendAndReceive()` is masked too. Before, that frame was returned as received. In receipt and
-  other free text, any card-shaped run is masked: 13 or more digits that are adjacent or separated
-  by exactly one space, dash, dot, tab or non-breaking space. The first 6 and last 4 digits are
-  kept, and separators and line length are unchanged. Dates, times, amounts and numbers shorter
-  than 13 digits are untouched. NCAR (007) is always returned in the standard form
-  (`516794******3315`), however it arrives grouped.
 - **Receipts follow spec §5 exactly.** Every DP line is kept, in order, as sent, including
   lines with empty text (they were dropped). The SDK no longer adds or replaces lines: the
   "TKPAY" header substitution and the "Powered by NAPS" line are removed. Card numbers of 13 to
