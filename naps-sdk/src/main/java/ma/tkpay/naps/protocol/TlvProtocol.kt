@@ -490,26 +490,20 @@ object TlvProtocol {
         return "$first6$maskedMiddle$last4"
     }
 
-    // Card numbers in free text: 13-19 digits, contiguous or grouped by spaces or dashes
-    // (4-4-4-4[-1..3] or 4-6-4/5). Lookarounds rather than \b so a number glued to a
-    // letter is still found; a longer digit run is not a card number.
-    private val PAN_PATTERNS = listOf(
-        Regex("(?<!\\d)\\d{4}([ -])\\d{4}(?:\\1\\d{4}){1,2}(?:\\1\\d{1,3})?(?!\\d)"),
-        Regex("(?<!\\d)\\d{4}([ -])\\d{6}\\1\\d{4,5}(?!\\d)"),
-        Regex("(?<!\\d)\\d{13,19}(?!\\d)")
-    )
+    // A card-shaped run: digits that are adjacent or separated by exactly one space,
+    // dash, dot, tab or non-breaking space. Slashes, colons, commas and repeated
+    // separators end a run, so dates, times and amounts are never joined into one.
+    private val CARD_SHAPED_RUN = Regex("\\d(?:[ \\-.\t\u00A0]?\\d)*")
 
     /**
-     * Mask any card number in text, keeping the first 6 and last 4 digits. Only
-     * digits are replaced, so separators and the text length are unchanged.
+     * Mask every card-shaped run of 13 or more digits in text (longer runs too: fail
+     * closed), keeping the first 6 and last 4 digits of the run. Only digits are
+     * replaced, so separators and the text length are unchanged.
      * Example: "5167 9400 0012 3315" -> "5167 94** **** 3315"
      */
     fun maskCardNumbersInText(text: String): String =
-        PAN_PATTERNS.fold(text) { acc, pattern ->
-            pattern.replace(acc) { m ->
-                val digits = m.value.count { it.isDigit() }
-                if (digits in 13..19) maskDigits(m.value) else m.value
-            }
+        CARD_SHAPED_RUN.replace(text) { m ->
+            if (m.value.count { it.isDigit() } >= 13) maskDigits(m.value) else m.value
         }
 
     /** Replace every digit except the first 6 and last 4 with '*', keeping other characters. */

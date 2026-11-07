@@ -356,9 +356,9 @@ SDK passes it through unchanged. Each print line has a number (DP1, tag 030), a 
 Lines are separated by `*` and the block ends with `?` (spec §5).
 
 The SDK keeps **every** line in order, including lines with empty text. It adds no text of its
-own. The only change it ever makes is masking a card number (13 to 19 digits, with or without
-spaces or dashes) if one appears in a line: only the digits between the first 6 and the last 4
-become `*`, and the rest of the line is kept exactly.
+own. The only change it ever makes is masking a card number if one appears in a line (see
+[PAN masking](#pan-masking-and-data-sent-by-the-sdk)): only the digits between the first 6 and
+the last 4 become `*`, and the rest of the line is kept exactly.
 
 **Which copy comes from where**
 
@@ -429,9 +429,14 @@ The merchant copy is the same with "Copie Commercant" as its last line. The void
 ## PAN masking and data sent by the SDK
 
 - **Card numbers are masked** (first 6 + last 4 digits): `5167940123453315` → `516794******3315`.
-  The SDK masks every reply as soon as it is read from the terminal, before it is parsed: the
-  card number field (tag 007) and any card number in receipt text, including grouped forms such
-  as `5167 9400 0012 3315`. The full number is never exposed or logged: not in results,
+  The SDK masks every reply as soon as it is read from the terminal, before it is parsed. The
+  card number field (tag 007) always comes back as first 6 + `*` + last 4, however it was
+  grouped. In receipt text, any run of 13 or more digits is masked: digits may be adjacent or
+  separated by exactly one space, dash, dot, tab or non-breaking space. Only the digits between
+  the first 6 and the last 4 of the run change, so `5167 9400 0012 3315` → `5167 94** **** 3315`.
+  Dates and times (`07/11/2026 00:12:10`), amounts (`10.00`, `1 250,00`) and shorter numbers
+  (STAN, terminal, authorisation) are left as they are. The full number is never exposed or
+  logged: not in results,
   receipts, errors, request frames, or the raw reply returned by `NapsConnection` /
   `UsbSerialConnection.sendAndReceive()`. The SDK never logs frames.
 - **No storage.** The SDK has no code that writes to disk or `SharedPreferences`. Its log lines

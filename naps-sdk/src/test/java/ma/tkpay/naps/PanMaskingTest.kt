@@ -89,6 +89,34 @@ class PanMaskingTest {
     }
 
     @Test
+    fun maskCardNumbersInText_sharedTestVectors() {
+        val vectors = listOf(
+            "5167940000123315" to "516794******3315",
+            "5167 9400 0012 3315" to "5167 94** **** 3315",
+            "5167-9400-0012-3315" to "5167-94**-****-3315",
+            "5167.9400.0012.3315" to "5167.94**.****.3315",
+            "6011000990139424127" to "601100*********4127",
+            "5167 9400 0012 3315 0000" to "5167 94** **** **** 0000",
+            "5167\t9400\t0012\t3315" to "5167\t94**\t****\t3315",
+            "5167\u00A09400\u00A00012\u00A03315" to "5167\u00A094**\u00A0****\u00A03315",
+            "07/11/2026 00:12:10" to "07/11/2026 00:12:10",
+            "MONTANT: 10.00 MAD" to "MONTANT: 10.00 MAD",
+            "MONTANT: 1 250,00 MAD" to "MONTANT: 1 250,00 MAD",
+            "Terminal: 00000001" to "Terminal: 00000001",
+            "STAN: 489688 Autorisation: 963962" to "STAN: 489688 Autorisation: 963962",
+            "516794000012" to "516794000012",                 // 12 digits: not card-shaped
+            "5167  9400  0012  3315" to "5167  9400  0012  3315"  // double spaces end the run
+        )
+        for ((input, expected) in vectors) {
+            val masked = TlvProtocol.maskCardNumbersInText(input)
+            println("VECTOR ${input.replace("\t", "\\t").replace("\u00A0", "<NBSP>")} -> " +
+                masked.replace("\t", "\\t").replace("\u00A0", "<NBSP>"))
+            assertEquals(input, expected, masked)
+            assertEquals(input.length, masked.length)
+        }
+    }
+
+    @Test
     fun maskCardNumbersInText_leavesNonCardNumbersAlone() {
         for (text in listOf("07/11/2026 00:16:42", "MID: 000000000001", "STAN: 489688", "VENTES:     0000000",
                 "Terminal: 00000001", "516794******3315")) {
