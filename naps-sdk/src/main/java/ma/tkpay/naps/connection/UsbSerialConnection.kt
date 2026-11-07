@@ -18,6 +18,7 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import ma.tkpay.naps.config.NapsConfig
 import ma.tkpay.naps.models.NapsError
+import ma.tkpay.naps.protocol.TlvProtocol
 import kotlin.coroutines.resume
 
 /**
@@ -139,7 +140,8 @@ class UsbSerialConnection(
         }
 
         if (out.isEmpty()) throw NapsError.invalidResponse("Empty response from terminal")
-        return out.toString()
+        // SECURITY: card numbers are masked before the reply leaves the transport
+        return TlvProtocol.maskFrame(out.toString())
     }
 
     override suspend fun disconnect() = withContext(Dispatchers.IO) {

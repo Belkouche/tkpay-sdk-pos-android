@@ -51,6 +51,13 @@ All notable changes to the TKpay NAPS POS SDK (Android) are documented here.
   real terminal receipt came back with one line. `TlvProtocol.parse` now only treats
   `'!'`/`'?'` as the frame terminator at a field boundary, so the `'?'` inside the DP
   value no longer cuts off the fields after it.
+- **Card numbers are masked on read** (first 6 + last 4 digits) and the full number is never
+  exposed or logged. Both transports now mask every reply as soon as it is read
+  (`TlvProtocol.maskFrame`, length-preserving), so the raw frame returned by the public
+  `sendAndReceive()` is masked too. Before, that frame was returned as received. Receipt-text
+  masking also covers card numbers grouped by spaces or dashes (`5167 9400 0012 3315`) and numbers
+  directly next to letters. NCAR (007) is always returned in the standard form
+  (`516794******3315`), even if it arrives grouped.
 - **Receipts follow spec §5 exactly.** Every DP line is kept, in order, as sent, including
   lines with empty text (they were dropped). The SDK no longer adds or replaces lines: the
   "TKPAY" header substitution and the "Powered by NAPS" line are removed. Card numbers of 13 to

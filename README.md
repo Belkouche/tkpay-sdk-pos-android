@@ -350,14 +350,15 @@ println(if (reset.success) "PIN pad reset" else "Reset failed: ${reset.error}")
 
 ## Receipts
 
-The receipt is the DP block (tag 010) the terminal sends: a certified layout the SDK passes
-through unchanged. Each print line has a number (DP1, tag 030), a style (DP2, 031: `S` simple
+The receipt is the DP block (tag 010) the terminal sends, in the terminal's own layout. The
+SDK passes it through unchanged. Each print line has a number (DP1, tag 030), a style (DP2, 031: `S` simple
 / `G` bold), an alignment (DP3, 032: `G` left / `C` centre / `D` right) and its text (DP4, 033).
 Lines are separated by `*` and the block ends with `?` (spec §5).
 
 The SDK keeps **every** line in order, including lines with empty text. It adds no text of its
-own. The only change it ever makes is masking a full card number (13 to 19 digits) if one
-appears in a line: first 6 and last 4 digits kept, the line itself kept.
+own. The only change it ever makes is masking a card number (13 to 19 digits, with or without
+spaces or dashes) if one appears in a line: only the digits between the first 6 and the last 4
+become `*`, and the rest of the line is kept exactly.
 
 **Which copy comes from where**
 
@@ -427,9 +428,12 @@ The merchant copy is the same with "Copie Commercant" as its last line. The void
 
 ## PAN masking and data sent by the SDK
 
-- **PAN masking.** The card number (tag 007) is masked as soon as a reply is parsed, keeping the
-  first 6 and last 4 digits: `5167940123453315` → `516794******3315`. Any 13- to 19-digit number
-  inside receipt text is masked the same way. The full PAN is never returned by the SDK.
+- **Card numbers are masked** (first 6 + last 4 digits): `5167940123453315` → `516794******3315`.
+  The SDK masks every reply as soon as it is read from the terminal, before it is parsed: the
+  card number field (tag 007) and any card number in receipt text, including grouped forms such
+  as `5167 9400 0012 3315`. The full number is never exposed or logged: not in results,
+  receipts, errors, request frames, or the raw reply returned by `NapsConnection` /
+  `UsbSerialConnection.sendAndReceive()`. The SDK never logs frames.
 - **No storage.** The SDK has no code that writes to disk or `SharedPreferences`. Its log lines
   contain no card data.
 - **Gateway notification.** After every `processPayment` call (approved or declined), the SDK

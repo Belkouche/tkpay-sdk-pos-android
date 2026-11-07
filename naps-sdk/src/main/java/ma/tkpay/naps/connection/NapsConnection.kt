@@ -6,6 +6,7 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import ma.tkpay.naps.config.NapsConfig
 import ma.tkpay.naps.models.NapsError
+import ma.tkpay.naps.protocol.TlvProtocol
 import java.io.BufferedReader
 import java.io.InputStreamReader
 import java.io.PrintWriter
@@ -146,7 +147,8 @@ class NapsConnection(private val config: NapsConfig) : NapsTransport {
             throw NapsError.invalidResponse("Empty response from terminal")
         }
 
-        response.toString()
+        // SECURITY: card numbers are masked before the reply leaves the transport
+        TlvProtocol.maskFrame(response.toString())
     }
 
     /**

@@ -27,7 +27,7 @@ object TlvProtocol {
         const val NS = "004"      // Sequence Number (6 chars)
         const val NSA = "005"     // Cancellation Sequence Number (6 chars)
         const val NHC = "006"     // Hostess Number (2 chars)
-        const val NCAR = "007"    // Card Number (masked) (16 chars)
+        const val NCAR = "007"    // Card Number (16 chars) — masked on read, first 6 + last 4
         const val STAN = "008"    // System Trace Audit Number (6 chars)
         const val NA = "009"      // Authorization Number (6 chars)
         const val DP = "010"      // Printable Data / Receipt (3500 chars)
@@ -440,7 +440,8 @@ object TlvProtocol {
         // boundary, so any noise after it is ignored. Terminator characters inside
         // a length-prefixed value (e.g. the '?' ending the DP print lines, §5) are
         // data. Both are accepted so the parser is protocol-version agnostic.
-        val tlvString = rawTlvString
+        // SECURITY: card numbers are masked before any field is read
+        val tlvString = maskFrame(rawTlvString)
         var index = 0
 
         while (index < tlvString.length) {
@@ -463,9 +464,9 @@ object TlvProtocol {
 
             var value = tlvString.substring(index + 6, index + 6 + length)
 
-            // SECURITY: Immediately mask PAN in tag 007 (NCAR)
+            // SECURITY: NCAR (007) in the standard masked form, e.g. 516794******3315
             if (tag == Tags.NCAR) {
-                value = maskCardNumber(value)
+                value = maskCardNumber(value.filterNot { it == ' ' || it == '-' })
             }
 
             fields[tag] = value
@@ -489,15 +490,96 @@ object TlvProtocol {
         return "$first6$maskedMiddle$last4"
     }
 
+    // Card numbers in free text: 13-19 digits, contiguous or grouped by spaces or dashes
+    // (4-4-4-4[-1..3] or 4-6-4/5). Lookarounds rather than \b so a number glued to a
+    // letter is still found; a longer digit run is not a card number.
+    private val PAN_PATTERNS = listOf(
+        Regex("(?<!\\d)\\d{4}([ -])\\d{4}(?:\\1\\d{4}){1,2}(?:\\1\\d{1,3})?(?!\\d)"),
+        Regex("(?<!\\d)\\d{4}([ -])\\d{6}\\1\\d{4,5}(?!\\d)"),
+        Regex("(?<!\\d)\\d{13,19}(?!\\d)")
+    )
+
     /**
-     * Mask any card number (13 to 19 consecutive digits) in text, keeping the
-     * first 6 and last 4 digits
+     * Mask any card number in text, keeping the first 6 and last 4 digits. Only
+     * digits are replaced, so separators and the text length are unchanged.
+     * Example: "5167 9400 0012 3315" -> "5167 94** **** 3315"
      */
-    fun maskCardNumbersInText(text: String): String {
-        val panPattern = Regex("\\b\\d{13,19}\\b")
-        return panPattern.replace(text) { matchResult ->
-            maskCardNumber(matchResult.value)
+    fun maskCardNumbersInText(text: String): String =
+        PAN_PATTERNS.fold(text) { acc, pattern ->
+            pattern.replace(acc) { m ->
+                val digits = m.value.count { it.isDigit() }
+                if (digits in 13..19) maskDigits(m.value) else m.value
+            }
         }
+
+    /** Replace every digit except the first 6 and last 4 with '*', keeping other characters. */
+    private fun maskDigits(value: String): String {
+        val total = value.count { it.isDigit() }
+        if (total < 10) return value
+        var seen = 0
+        return buildString {
+            for (c in value) {
+                if (c.isDigit()) {
+                    append(if (seen in 6 until total - 4) '*' else c)
+                    seen++
+                } else append(c)
+            }
+        }
+    }
+
+    /**
+     * Mask every card number in a raw TLV frame without changing its length, so
+     * the TLV lengths stay valid: NCAR (007) values, DP (010) print-line texts and
+     * any card number elsewhere in a value or in trailing bytes. Transports apply
+     * this to every reply as soon as it is read.
+     */
+    fun maskFrame(frame: String): String {
+        val out = StringBuilder(frame.length)
+        var index = 0
+        while (index + 6 <= frame.length) {
+            val c = frame[index]
+            if (c == TERMINATOR_V2 || c == TERMINATOR_V1) break
+            val lengthStr = frame.substring(index + 3, index + 6)
+            if (!lengthStr.all { it.isDigit() }) break
+            val length = lengthStr.toInt()
+            if (index + 6 + length > frame.length) break
+
+            val tag = frame.substring(index, index + 3)
+            val value = frame.substring(index + 6, index + 6 + length)
+            out.append(frame, index, index + 6)
+            out.append(
+                when (tag) {
+                    Tags.NCAR -> maskDigits(value)
+                    Tags.DP -> maskPrintBlock(value)
+                    else -> maskCardNumbersInText(value)
+                }
+            )
+            index += 6 + length
+        }
+        // Terminator, trailing bytes or an unparseable remainder
+        out.append(maskCardNumbersInText(frame.substring(index)))
+        return out.toString()
+    }
+
+    /** Mask card numbers in each DP line text (sub-tag 033), keeping the block's structure. */
+    private fun maskPrintBlock(dp: String): String {
+        val out = StringBuilder(dp.length)
+        var index = 0
+        while (index < dp.length) {
+            val c = dp[index]
+            if (c == '*' || c == '?') { out.append(c); index++; continue }
+            if (index + 6 > dp.length) break
+            val lengthStr = dp.substring(index + 3, index + 6)
+            if (!lengthStr.all { it.isDigit() }) break
+            val length = lengthStr.toInt()
+            if (index + 6 + length > dp.length) break
+            val value = dp.substring(index + 6, index + 6 + length)
+            out.append(dp, index, index + 6)
+            out.append(if (dp.startsWith(ReceiptTags.CONTENT, index)) maskCardNumbersInText(value) else value)
+            index += 6 + length
+        }
+        out.append(maskCardNumbersInText(dp.substring(index)))
+        return out.toString()
     }
 
     /**
