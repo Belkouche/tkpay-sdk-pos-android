@@ -9,6 +9,7 @@ import ma.tkpay.naps.NapsPayClient
 import ma.tkpay.naps.config.NapsConfig
 import ma.tkpay.naps.models.NapsError
 import ma.tkpay.naps.models.PaymentRequest
+import ma.tkpay.naps.protocol.TlvProtocol
 import ma.tkpay.naps.sample.databinding.ActivityMainBinding
 
 class MainActivity : AppCompatActivity() {
@@ -16,6 +17,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var binding: ActivityMainBinding
     private var lastStan: String? = null
     private var lastSequence: String? = null
+    private var lastAmountCentimes: Long? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -96,6 +98,7 @@ class MainActivity : AppCompatActivity() {
             if (result.isApproved()) {
                 lastStan = result.stan
                 lastSequence = result.sequence
+                lastAmountCentimes = TlvProtocol.toCentimes(amount)
                 buildString {
                     append("✅ APPROVED\n\n")
                     append("STAN:   ${result.stan}\n")
@@ -113,23 +116,28 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // ── Cancel (TM=003) ───────────────────────────────────────────────────
+    // ── Void (TM=003 → TM=004) ────────────────────────────────────────────
 
     private fun cancelPayment() {
         val stan = lastStan
         val seq = lastSequence
-        if (stan == null || seq == null) {
+        val amountCentimes = lastAmountCentimes
+        if (stan == null || seq == null || amountCentimes == null) {
             binding.resultTextView.text = "No previous transaction to cancel."
             return
         }
 
         withClient("Cancelling STAN=$stan…") { client ->
-            val result = client.cancelPayment(stan, "01", "00001", seq)
-            if (result.success) {
-                lastStan = null; lastSequence = null
-                "✅ Cancelled — STAN: ${result.stan}"
-            } else {
-                "❌ Cancel failed [${result.responseCode}]: ${result.error}"
+            val result = client.cancelPayment(stan, "01", "00001", seq, amountCentimes)
+            when {
+                result.success -> {
+                    lastStan = null; lastSequence = null; lastAmountCentimes = null
+                    "✅ Cancelled (CR ${result.responseCode}) — STAN: ${result.stan}"
+                }
+                result.pending ->
+                    "⚠️ Void UNCONFIRMED [${result.responseCode}] — do not treat as voided.\n" +
+                    "Use Duplicate to check STAN ${result.stan}."
+                else -> "❌ Cancel failed [${result.responseCode}]: ${result.error}"
             }
         }
     }

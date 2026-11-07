@@ -75,6 +75,72 @@
         app:layout_constraintTop_toBottomOf="@id/testConnectionButton"
         android:layout_marginTop="16dp" />
 
+    <LinearLayout
+        android:id="@+id/actionsRow1"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toBottomOf="@id/processPaymentButton"
+        android:layout_marginTop="8dp">
+
+        <Button
+            android:id="@+id/networkTestButton"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="Network test"
+            android:textSize="12sp" />
+        <Button
+            android:id="@+id/referencingButton"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="Referencing"
+            android:textSize="12sp" />
+        <Button
+            android:id="@+id/cancelButton"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="Void last"
+            android:textSize="12sp" />
+    </LinearLayout>
+
+    <LinearLayout
+        android:id="@+id/actionsRow2"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toBottomOf="@id/actionsRow1"
+        android:layout_marginTop="8dp">
+
+        <Button
+            android:id="@+id/duplicateButton"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="Duplicate"
+            android:textSize="12sp" />
+        <Button
+            android:id="@+id/settlementButton"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="Settlement"
+            android:textSize="12sp" />
+        <Button
+            android:id="@+id/resetButton"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="Reset"
+            android:textSize="12sp" />
+    </LinearLayout>
+
     <ScrollView
         android:id="@+id/resultScrollView"
         android:layout_width="0dp"
@@ -82,8 +148,8 @@
         app:layout_constraintBottom_toBottomOf="parent"
         app:layout_constraintEnd_toEndOf="parent"
         app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintTop_toBottomOf="@id/processPaymentButton"
-        android:layout_marginTop="24dp">
+        app:layout_constraintTop_toBottomOf="@id/actionsRow2"
+        android:layout_marginTop="16dp">
 
         <TextView
             android:id="@+id/resultTextView"
