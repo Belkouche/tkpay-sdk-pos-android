@@ -60,8 +60,7 @@ dependencies {
 }
 ```
 
-`v1.3.0` is the latest published tag. Version 1.4.0 (this README, NapsPay v5.4.4) is not
-tagged yet. Until it is, use the local module below.
+Use `v1.4.1` (NapsPay v5.4.4) or later as `TAG`. You can also use the SDK as a local module:
 
 **Local module**
 

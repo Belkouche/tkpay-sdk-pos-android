@@ -2,6 +2,12 @@
 
 All notable changes to the TKpay NAPS POS SDK (Android) are documented here.
 
+## [1.4.1] - 2026-11-07
+
+- Repository hygiene only: stop tracking `sample-app/local.properties` and `sample-app/.gradle/`
+  (machine-specific), drop a stray local path from `.gitignore`, and update the README install note.
+  No API or behaviour change.
+
 ## [1.4.0] - 2026-11-06
 
 ### NapsPay v5.4.4 sync with the canonical C# SDK (1.4.0)
