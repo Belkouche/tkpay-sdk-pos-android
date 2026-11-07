@@ -36,3 +36,7 @@ coverage/
 *.tmp
 .cache/
 /Users/belkouche/Projects/Aslan/aslan-api-standalone/src/routes/backup-*
+
+# Gradle / Android local state
+.gradle/
+local.properties
