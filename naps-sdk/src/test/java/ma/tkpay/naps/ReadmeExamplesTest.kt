@@ -17,10 +17,6 @@ class ReadmeExamplesTest {
         val port = System.getenv("NAPS_EMULATOR_PORT")?.toIntOrNull()
         assumeTrue("NAPS_EMULATOR_PORT not set", port != null)
         assumeTrue((System.getenv("NAPS_EMULATOR_MODE") ?: "approve") == "approve")
-        // processPayment fires a gateway notification; never let a test run reach it
-        System.setProperty("https.proxyHost", "127.0.0.1")
-        System.setProperty("https.proxyPort", "9")
-
         val client = NapsPayClient(NapsConfig(host = "127.0.0.1", port = port!!))
         val saved = ReadmeExamples.payment(client)
         assertNotNull(saved)

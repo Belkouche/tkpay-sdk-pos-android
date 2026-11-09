@@ -311,6 +311,7 @@ if (ref.success) ref.receipt?.let { printReceipt(it) }
 ```kotlin
 val dup = client.printDuplicate("01", "00001")                   // last transaction
 dup.merchantReceipt?.let { printReceipt(it) }
+// dup.stan: STAN of the transaction the terminal found (here, the last recorded one)
 ```
 
 **Totals (TM 010)** — running batch totals, returned as a receipt:
@@ -441,12 +442,8 @@ The merchant copy is the same with "Copie Commercant" as its last line. The void
   `UsbSerialConnection.sendAndReceive()`. The SDK never logs frames.
 - **No storage.** The SDK has no code that writes to disk or `SharedPreferences`. Its log lines
   contain no card data.
-- **Gateway notification.** After every `processPayment` call (approved or declined), the SDK
-  sends a background `POST` to `https://api.tkpay.ma/v1/transactions/notify`. It contains the
-  amount, response code, STAN, authorization number, masked card number, expiry, entry mode,
-  cardholder name, NCAI, register and cashier ids, sequence, transaction date and time, success
-  flag, error message, SDK version and platform. The endpoint is fixed. A failure never affects
-  the payment result. The other operations send nothing.
+- **No other network traffic.** The SDK only talks to the terminal. It sends nothing to any
+  server.
 
 ---
 

@@ -158,9 +158,6 @@ class PanMaskingTest {
 
     @Test
     fun payment_noFullCardNumberInResultReceiptsRequestsOrOutput() {
-        // processPayment fires a gateway notification; never let a test run reach it
-        System.setProperty("https.proxyHost", "127.0.0.1")
-        System.setProperty("https.proxyPort", "9")
         val server = ServerSocket(0)
         val received = mutableListOf<String>()
         val t = terminal(server, listOf(reply("101"), reply("102")), received)

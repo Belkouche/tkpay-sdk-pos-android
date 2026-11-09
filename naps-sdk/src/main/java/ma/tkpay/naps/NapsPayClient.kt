@@ -10,7 +10,6 @@ import ma.tkpay.naps.connection.NapsConnection
 import ma.tkpay.naps.connection.NapsTransport
 import ma.tkpay.naps.connection.UsbSerialConnection
 import ma.tkpay.naps.connection.use
-import ma.tkpay.naps.gateway.GatewayNotifier
 import ma.tkpay.naps.models.CancellationResult
 import ma.tkpay.naps.models.DuplicateReceiptResult
 import ma.tkpay.naps.models.NapsError
@@ -80,9 +79,6 @@ class NapsPayClient(
         }
     }
 
-    /** Best-effort label for gateway notifications: TCP host or serial device name. */
-    private fun terminalLabel(): String = config.host ?: config.serialPortName ?: "usb-serial"
-
     /**
      * Process a payment transaction
      *
@@ -108,14 +104,7 @@ class NapsPayClient(
                 ?: throw NapsError.invalidResponse("Missing response code")
 
             if (responseCode != "000") {
-                val result = buildFailedResult(responseCode, paymentResponse)
-                // Send notification to gateway
-                GatewayNotifier.notifyTransaction(
-                    terminalHost = terminalLabel(),
-                    request = request,
-                    result = result
-                )
-                return@withContext result
+                return@withContext buildFailedResult(responseCode, paymentResponse)
             }
 
             // Phase 2: Confirmation (must be on same connection, within 40 seconds)
@@ -125,16 +114,7 @@ class NapsPayClient(
                 paymentResponse
             )
 
-            val result = buildPaymentResult(paymentResponse, confirmationResponse)
-
-            // Send notification to gateway
-            GatewayNotifier.notifyTransaction(
-                terminalHost = terminalLabel(),
-                request = request,
-                result = result
-            )
-
-            result
+            buildPaymentResult(paymentResponse, confirmationResponse)
         } finally {
             connection.disconnect()
         }
@@ -555,6 +535,7 @@ class NapsPayClient(
             DuplicateReceiptResult(
                 success = responseCode == "000",
                 responseCode = responseCode,
+                stan = fields[TlvProtocol.Tags.STAN]?.takeIf { it.isNotEmpty() },
                 merchantReceipt = merchantReceipt,
                 error = if (responseCode != "000") "Duplicate receipt failed with code: $responseCode" else null
             )

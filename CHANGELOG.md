@@ -2,6 +2,13 @@
 
 All notable changes to the TKpay NAPS POS SDK (Android) are documented here.
 
+## [Unreleased]
+
+- **Removed the gateway notification.** `processPayment` no longer sends a background `POST` to
+  `https://api.tkpay.ma` after each payment. The SDK only talks to the terminal.
+- `DuplicateReceiptResult.stan`: the STAN (008) of the transaction the terminal found (TM 108).
+  With no STAN in the request, this tells which transaction is the last recorded one.
+
 ## [1.4.2] - 2026-11-07
 
 - **Card numbers are masked on read** (first 6 + last 4 digits) and the full number is never

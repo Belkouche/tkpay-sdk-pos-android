@@ -27,8 +27,7 @@ import org.junit.Test
  * Modes covered: approve, decline, error (--code 116), confirm_error (--code 482),
  * no_confirm, and the void modes void_refuse (--code 482), void_480, void_995,
  * void_no_confirm. The payment flow is driven through NapsConnection + TlvProtocol (the
- * same frames and result mapping processPayment uses) so no gateway notification
- * is fired from tests.
+ * same frames and result mapping processPayment uses).
  */
 class EmulatorIntegrationTest {
 
