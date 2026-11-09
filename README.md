@@ -60,7 +60,7 @@ dependencies {
 }
 ```
 
-Use `v1.4.2` (NapsPay v5.4.4) or later as `TAG`. You can also use the SDK as a local module:
+Use `v1.5.0` (NapsPay v5.4.4) or later as `TAG`. You can also use the SDK as a local module:
 
 **Local module**
 

@@ -2,7 +2,7 @@
 
 All notable changes to the TKpay NAPS POS SDK (Android) are documented here.
 
-## [Unreleased]
+## [1.5.0] - 2026-11-09
 
 - **Removed the gateway notification.** `processPayment` no longer sends a background `POST` to
   `https://api.tkpay.ma` after each payment. The SDK only talks to the terminal.
