@@ -548,7 +548,7 @@ usbClient.networkTest("01", "00001") // at app start: ~30 s on a Lane 3600 over 
 | `transport` | `TCP_SOCKET` | `TCP_SOCKET` or `USB_SERIAL` |
 | `serialPortName` | `null` | USB device name; `null` = auto-discover by vendor id `0x0B00`, then first CDC-ACM device |
 | `serialBaudRate` | `115200` | USB serial speed |
-| `protocolVersion` | `null` | `V2` (`!`) or `V1` (`?`); `null` = V2 for TCP, V1 for USB. Both terminators are always accepted. |
+| `protocolVersion` | `null` | `V2` (`!`) or `V1` (`?`); `null` = V2 on both transports (the Lane 3600 over USB ends every reply with `!`). Both terminators are always accepted. |
 
 **USB (Ingenico)** — uses Android USB-host mode via
 [usb-serial-for-android](https://github.com/mik3y/usb-serial-for-android). On `connect()` the

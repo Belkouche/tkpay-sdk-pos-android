@@ -31,6 +31,9 @@ Ported from the Node and C# SDKs, both verified on a live Lane3600 over USB (net
   TCP (Sunmi, whose lengths count characters) is unchanged.
 - **Docs:** on the Lane3600 only the last transaction can be reprinted; a duplicate by STAN
   answers CR 381.
+- **USB serial defaults to protocol V2** (was V1). The Lane3600 ends every reply with '!' and was
+  only verified with '!'-terminated requests; a '?'-terminated request was never tested. Set
+  `ProtocolVersion.V1` explicitly for a legacy terminal.
 - **USB serial: one port for the life of the client.** `NapsPayClient` keeps the USB port open
   between operations instead of reopening it each time; `close()` releases it. After a timeout
   or error the port is closed, so a late reply is never read as the answer to the next request.
