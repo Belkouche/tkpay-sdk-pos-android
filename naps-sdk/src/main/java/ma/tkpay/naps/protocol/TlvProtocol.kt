@@ -444,6 +444,22 @@ object TlvProtocol {
         return msg
     }
 
+    /** Largest reply accepted, in characters (replies seen are ~2 KB). */
+    const val MAX_RESPONSE_CHARS = 64 * 1024
+
+    /**
+     * Reader check after each chunk: throws past [MAX_RESPONSE_CHARS], and walks the fields
+     * ([isCompleteMessage]) only when the data ends with '!' or '?'. A reply ending otherwise
+     * closes on silence.
+     */
+    fun isCompleteResponse(buf: CharSequence): Boolean {
+        if (buf.length > MAX_RESPONSE_CHARS) {
+            throw NapsError.invalidResponse("Response larger than $MAX_RESPONSE_CHARS characters")
+        }
+        val last = buf.lastOrNull() ?: return false
+        return (last == TERMINATOR_V2 || last == TERMINATOR_V1) && isCompleteMessage(buf)
+    }
+
     /**
      * True once [buf] holds a complete message: walking the fields by their length lands on a
      * '!'/'?' terminator. A terminator inside a value (receipt lines end with '?') is data, so a

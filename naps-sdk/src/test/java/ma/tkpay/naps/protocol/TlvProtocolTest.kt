@@ -292,4 +292,14 @@ class TlvProtocolTest {
         assertTrue(TlvProtocol.isCompleteMessage("garbage!"))                        // non-TLV fallback
         assertFalse(TlvProtocol.isCompleteMessage("garbage"))
     }
+
+    @Test
+    fun isCompleteResponse_walksOnlyWhenDataEndsWithTerminator_andCapsSize() {
+        assertTrue(TlvProtocol.isCompleteResponse("001003109013003000!"))
+        assertFalse(TlvProtocol.isCompleteResponse("001003109013003000!0")) // closes on silence
+        try {
+            TlvProtocol.isCompleteResponse("0".repeat(TlvProtocol.MAX_RESPONSE_CHARS + 1))
+            org.junit.Assert.fail("expected NapsError")
+        } catch (e: ma.tkpay.naps.models.NapsError) { }
+    }
 }

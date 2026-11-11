@@ -155,7 +155,7 @@ class NapsConnection(private val config: NapsConfig) : NapsTransport {
      * True once the accumulated response holds a complete message: a NAPS terminator ('!' v2 or
      * '?' v1, either one) on a field boundary. See [TlvProtocol.isCompleteMessage].
      */
-    private fun endsFrame(response: StringBuilder): Boolean = TlvProtocol.isCompleteMessage(response)
+    private fun endsFrame(response: StringBuilder): Boolean = TlvProtocol.isCompleteResponse(response)
 
     /**
      * Disconnect from terminal
