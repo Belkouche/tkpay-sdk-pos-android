@@ -13,6 +13,7 @@ import com.hoho.android.usbserial.driver.UsbSerialDriver
 import com.hoho.android.usbserial.driver.UsbSerialPort
 import com.hoho.android.usbserial.driver.UsbSerialProber
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
@@ -28,9 +29,10 @@ import kotlin.coroutines.resume
  * USB access requires an explicit runtime grant, [connect] first requests USB
  * permission via a broadcast flow if the app doesn't already hold it.
  *
- * Wire behaviour matches [NapsConnection]: the raw TLV request is written verbatim
- * and the response is read until the NAPS end-of-message terminator (`'!'` v2 /
- * `'?'` v1) with a short inter-chunk silence fallback.
+ * Each request ends with the NAPS terminator (`'!'` v2 / `'?'` v1) and is written only when
+ * [SerialTiming] allows it; the response is read until a terminator, with a short
+ * inter-chunk silence fallback. After a timeout or error the port is closed, so a reply that
+ * arrives late is never read as the answer to the next request.
  *
  * NOTE: This path cannot run against the TCP emulator and requires USB-host hardware
  * plus a granted USB permission. It is unit-tested at the logic layer
@@ -45,6 +47,8 @@ class UsbSerialConnection(
         context.getSystemService(Context.USB_SERVICE) as UsbManager
 
     private var port: UsbSerialPort? = null
+    private var openedAt = 0L
+    private var lastRxAt = 0L
 
     override val isConnected: Boolean
         get() = port?.isOpen == true
@@ -92,6 +96,7 @@ class UsbSerialConnection(
             p.dtr = false
             p.rts = false
             port = p
+            openedAt = System.currentTimeMillis()
         } catch (e: Exception) {
             try { connection.close() } catch (_: Exception) { }
             throw NapsError.connectionFailed(e)
@@ -103,12 +108,17 @@ class UsbSerialConnection(
         timeout: Long
     ): String = withContext(Dispatchers.IO) {
         val p = port ?: throw NapsError.connectionFailed(IllegalStateException("Not connected"))
+        delay(SerialTiming.remainingWait(openedAt, lastRxAt, System.currentTimeMillis(), tlvMessage))
+        val terminator = config.resolveProtocolVersion().terminator.toString()
+        val frame = if (tlvMessage.endsWith(terminator)) tlvMessage else tlvMessage + terminator
         try {
-            p.write(tlvMessage.toByteArray(Charsets.US_ASCII), WRITE_TIMEOUT_MS)
-            withTimeout(timeout) { readResponse(p) }
+            p.write(frame.toByteArray(Charsets.US_ASCII), WRITE_TIMEOUT_MS)
+            withTimeout(timeout) { readResponse(p) }.also { lastRxAt = System.currentTimeMillis() }
         } catch (e: kotlinx.coroutines.TimeoutCancellationException) {
+            disconnect()
             throw NapsError.timeout(e)
         } catch (e: Exception) {
+            disconnect()
             throw NapsError.connectionFailed(e)
         }
     }

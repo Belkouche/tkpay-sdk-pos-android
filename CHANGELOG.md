@@ -2,6 +2,32 @@
 
 All notable changes to the TKpay NAPS POS SDK (Android) are documented here.
 
+## [Unreleased] — Ingenico Lane3600
+
+Ported from the Node and C# SDKs, both verified on a live Lane3600 over USB (network test →
+1 MAD payment → immediate void). The void frames were also verified on a Sunmi P2 over TCP.
+
+- **USB serial: wait after opening the port.** The Lane3600 holds back every answer until about
+  30 s after the port opens. When a payment was the first frame, its TM 101 arrived after the
+  terminal had stopped waiting for TM 002 ("attente validation caisse", then timeout), and the
+  payment was not recorded. The first frame now waits until the port has been open 32 s.
+- **USB serial: back-to-back operations.** After a reply the Lane3600 keeps showing or printing
+  the result, and a request arriving then is lost (a void right after a payment got no reply; a
+  payment 0.5 s after a network test was refused with CR 100 without a card prompt). A request
+  that starts a new operation waits 3 s after the last reply; TM 002 / TM 004 wait 0.5 s.
+  Requests end with the protocol terminator ('!' v2, '?' v1).
+- **USB serial: one port for the life of the client.** `NapsPayClient` keeps the USB port open
+  between operations instead of reopening it each time; `close()` releases it. After a timeout
+  or error the port is closed, so a late reply is never read as the answer to the next request.
+  TCP still opens one connection per operation.
+- **Void frames follow spec v2 §4.3/§4.4.** TM 003 carries the mandatory NS (a new sequence for
+  the void) and sends the payment's `sequence` in NSA; without NS the Lane3600 refused it with
+  CR 307. TM 004 repeats that NS and echoes MT, DE, DATR and HETR from TM 103, in spec order.
+- **Void receipt.** When TM 103 carries no receipt, as on the Lane3600, the TM 104 receipt is
+  returned as `merchantReceipt` instead of `customerReceipt`.
+- **Timeouts.** `networkTest` and `resetPinPad` use `timeout` (default 120 s) instead of a fixed
+  10 s, which is too short for the Lane3600.
+
 ## [1.5.0] - 2026-11-09
 
 - **Removed the gateway notification.** `processPayment` no longer sends a background `POST` to

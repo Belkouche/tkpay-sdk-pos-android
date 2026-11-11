@@ -15,7 +15,7 @@ terminal's replies into plain Kotlin results.
 |---|---|---|
 | Sunmi P2, Sunmi P3, Sunmi P2 Smart PAD | Wi-Fi, TCP port 4444 | **Yes** — default transport, tested against the emulator |
 | Sunmi P2 / P3 / P2 Smart PAD | USB | No |
-| Ingenico Self 5000, Ingenico Lane 3600 | USB only | **Implemented, not verified on hardware** — `TransportType.USB_SERIAL` (Android USB-host, CDC-ACM, Ingenico vendor id `0x0B00`) |
+| Ingenico Self 5000, Ingenico Lane 3600 | USB only | **Implemented, not verified on hardware with this SDK** — `TransportType.USB_SERIAL` (Android USB-host, CDC-ACM, Ingenico vendor id `0x0B00`). The Lane 3600 timing below was found with the Node and C# SDKs. |
 
 Requirements: Android 5.0+ (API 21), Kotlin 1.9+, coroutines. All SDK calls are `suspend`
 functions; they switch to `Dispatchers.IO` themselves.
@@ -224,9 +224,9 @@ A void (cancellation) is also two phases on one connection. `cancelPayment` runs
 sequenceDiagram
     participant App as Your app (SDK)
     participant T as Terminal
-    App->>T: TM 003 Cancellation (STAN, amount, sequence)
-    T-->>App: TM 103 (CR 000 = transaction found; amount, merchant receipt)
-    App->>T: TM 004 Cancellation confirmation (same sequence in NS, amount from TM 103)
+    App->>T: TM 003 Cancellation (STAN, amount, new NS, payment sequence in NSA)
+    T-->>App: TM 103 (CR 000 = transaction found; amount, date, time, merchant receipt)
+    App->>T: TM 004 Cancellation confirmation (same NS, amount/currency/date/time from TM 103)
     Note over T: reversal executed here
     T-->>App: TM 104 (CR = final outcome)
 ```
@@ -246,7 +246,10 @@ result keeps the STAN of the transaction and the TM 103 merchant receipt. Never 
 voided. Reprint the receipt for that STAN with `printDuplicate` and check it first.
 
 You need the `stan` and `sequence` from the approved `PaymentResult`, and the amount in
-centimes (required by NapsPay v5.4.4+):
+centimes (required by NapsPay v5.4.4+). The `sequence` is sent as NSA (005) in TM 003; the void
+gets a new NS of its own, repeated in TM 004 (spec v2 §4.3/§4.4). The Ingenico Lane 3600 sends no
+receipt with TM 103: its only void receipt comes with TM 104 and is returned as `merchantReceipt`,
+with no `customerReceipt`.
 
 ```kotlin
 val void = client.cancelPayment(
@@ -486,9 +489,8 @@ throws. `ErrorCode` also lists `PAYMENT_DECLINED`, `TERMINAL_DOWN`, `TRANSACTION
 | Step | Timeout |
 |---|---|
 | TCP connect | `timeout` (default 120 s) |
-| TM 001, 003, 008, 010, 013 reply | `timeout` (default 120 s) |
+| TM 001, 003, 008, 009, 010, 012, 013 reply | `timeout` (default 120 s) |
 | TM 002 and TM 004 reply | `confirmationTimeout` (default 40 s) |
-| TM 009 (network test), TM 012 (reset) reply | fixed 10 s |
 
 A reply is complete when it ends with `!` (protocol v2) or `?` (v1). The terminal sends no
 terminator on some replies (e.g. TM 103/104), so a reply also ends after 1 s without new data.
@@ -508,6 +510,24 @@ val client = NapsPayClient(tcp)
 
 // Ingenico over USB: needs a Context for the USB stack
 val usbClient = NapsPayClient(NapsConfig(transport = TransportType.USB_SERIAL), context)
+```
+
+**Ingenico Lane 3600 over USB.** The terminal holds back its answers until about 30 s after the
+port opens, so the first request after opening waits until the port has been open 32 s; a payment
+sent earlier would get its approval too late to confirm ("attente validation caisse", then
+timeout). After each reply it keeps showing or printing the result for a moment, so a request that
+starts a new operation waits 3 s after the last reply (the confirmations TM 002 / TM 004 wait
+0.5 s). Over USB the client keeps the port open between operations: use one `NapsPayClient` for
+the life of the app and call `close()` on exit. After a timeout or error the port is closed and the
+next operation reopens it.
+
+**Run a network test when the point-of-sale app starts.** It takes the 30 s wait while no customer
+is waiting, checks the terminal and the bank host, and leaves the port open, so the first sale goes
+straight to the card prompt:
+
+```kotlin
+val usbClient = NapsPayClient(NapsConfig(transport = TransportType.USB_SERIAL), context)
+usbClient.networkTest("01", "00001") // at app start: ~30 s on a Lane 3600 over USB
 ```
 
 | Parameter | Default | Description |

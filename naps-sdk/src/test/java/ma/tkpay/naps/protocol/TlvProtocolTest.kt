@@ -251,22 +251,33 @@ class TlvProtocolTest {
         assertEquals(TlvProtocol.Currency.MAD, fields[TlvProtocol.Tags.DE])
     }
 
-    // --- Cancellation confirmation (TM=004), spec §4.4 ---
+    // --- Cancellation (TM=003 / TM=004), spec §4.3/§4.4 ---
 
     @Test
-    fun cancellationConfirmation_carriesSequenceInNsNotNsa() {
-        val cancel = TlvProtocol.parse(TlvProtocol.buildCancellationRequest("000123", "0100001", "000045", 1999L))
-        val confirm = TlvProtocol.parse(
-            TlvProtocol.buildCancellationConfirmation("000123", "0100001", "000045", "000000001999")
-        )
+    fun cancellationRequest_carriesNewNs_andPaymentSequenceInNsa() {
+        val tlv = TlvProtocol.buildCancellationRequest("000123", "0100001", "000099", 1999L, "000045")
+        val fields = TlvProtocol.parse(tlv)
 
-        assertEquals(TlvProtocol.MessageTypes.CANCELLATION_CONFIRMATION_REQUEST, confirm[TlvProtocol.Tags.TM])
-        assertEquals("000045", confirm[TlvProtocol.Tags.NS])
+        assertEquals(TlvProtocol.MessageTypes.CANCELLATION_REQUEST, fields[TlvProtocol.Tags.TM])
+        // NS is mandatory (spec §4.3); without it the Lane3600 answers CR 307
+        assertEquals("000099", fields[TlvProtocol.Tags.NS])
+        assertEquals("000045", fields[TlvProtocol.Tags.NSA])
+        assertEquals("1999", fields[TlvProtocol.Tags.MT])
+        assertEquals("000123", fields[TlvProtocol.Tags.STAN])
+        assertTrue(tlv.startsWith("001003003" + "0030070100001" + "004006000099" + "014008"))
+    }
+
+    @Test
+    fun cancellationConfirmation_specOrder_echoesTm103() {
+        val tlv = TlvProtocol.buildCancellationConfirmation(
+            "000123", "0100001", "000099", "000000001999", "504", "06112026", "101500"
+        )
+        // Spec v2 §4.4 order, accepted by the Lane3600 and the Sunmi P2 (TM 104 CR 000)
+        assertTrue(tlv.startsWith(
+            "001003004" + "0030070100001" + "004006000099" + "008006000123" +
+            "002012000000001999" + "012003504" + "01800806112026" + "019006101500" + "014008"
+        ))
+        val confirm = TlvProtocol.parse(tlv)
         assertFalse("NSA must not be sent in TM=004", confirm.containsKey(TlvProtocol.Tags.NSA))
-        // 004.NS = the sequence the TM=003 carried
-        assertEquals(cancel[TlvProtocol.Tags.NSA], confirm[TlvProtocol.Tags.NS])
-        // Amount echoed verbatim from MT=103
-        assertEquals("000000001999", confirm[TlvProtocol.Tags.MT])
-        assertEquals("000123", confirm[TlvProtocol.Tags.STAN])
     }
 }

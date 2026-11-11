@@ -261,52 +261,66 @@ object TlvProtocol {
     fun toCentimes(amount: Double): Long = Math.round(amount * 100)
 
     /**
-     * Build cancellation request TLV (TM=003)
+     * Build cancellation request TLV (TM=003), spec v2 §4.3.
      *
-     * NapsPay v5.4.4+ requires the original amount (TAG 002) in the frame.
-     * Pass [amountCentimes] when targeting v5.4.4+.
+     * [sequence] is the void's own NS (004), a new number independent of the payment; TM=004
+     * must repeat it. [originalSequence], the payment's sequence, goes in NSA (005). NapsPay
+     * v5.4.4+ requires the original amount (TAG 002). Field order matches the frame the Ingenico
+     * Lane3600 accepted: TM, NCAI, NS, DA, HE, DATR, HETR, STAN, [MT], [NSA]. A frame with no NS
+     * was refused by the Lane3600 with CR 307 (format error).
      */
     fun buildCancellationRequest(
         stan: String,
         ncai: String,
         sequence: String,
-        amountCentimes: Long? = null
+        amountCentimes: Long? = null,
+        originalSequence: String? = null
     ): String {
         val dateTime = getCurrentDateTime()
 
-        var msg = buildField(Tags.TM, MessageTypes.CANCELLATION_REQUEST)
+        var msg = buildField(Tags.TM, MessageTypes.CANCELLATION_REQUEST) +
+                  buildField(Tags.NCAI, ncai) +
+                  buildField(Tags.NS, sequence) +
+                  buildField(Tags.DA, dateTime.date) +
+                  buildField(Tags.HE, dateTime.time) +
+                  buildField(Tags.DATR, dateTime.date) +
+                  buildField(Tags.HETR, dateTime.time) +
+                  buildField(Tags.STAN, stan)
         if (amountCentimes != null) msg += buildField(Tags.MT, amountCentimes.toString())
-        msg += buildField(Tags.STAN, stan) +
-               buildField(Tags.NCAI, ncai) +
-               buildField(Tags.NSA, sequence) +
-               buildField(Tags.DA, dateTime.date) +
-               buildField(Tags.HE, dateTime.time)
+        if (!originalSequence.isNullOrEmpty()) msg += buildField(Tags.NSA, originalSequence)
         return msg
     }
 
     /**
-     * Build cancellation confirmation request TLV (TM=004)
+     * Build cancellation confirmation request TLV (TM=004), spec v2 §4.4.
      *
-     * Sent on the same connection after receiving MT=103 from TM=003.
-     * [sequence] goes in NS (004), never NSA (005): spec §4.4 requires
-     * 004.NS = the sequence of the TM=003 it confirms.
-     * [amount] must echo the amount (TAG 002, 12-digit) from the MT=103
-     * response — omitting it is refused with CR=909 on NapsPay v5.4.4+.
+     * Sent on the same connection after receiving MT=103 from TM=003. Spec fields and order:
+     * TM, NCAI, NS (same as TM=003), STAN, MT, DE, DATR, HETR, DA, HE. [amount], [currency],
+     * [datr] and [hetr] are echoed from MT=103; omitting the amount is refused with CR=909 on
+     * NapsPay v5.4.4+. No NSA: the sequence goes in NS.
      */
     fun buildCancellationConfirmation(
         stan: String,
         ncai: String,
         sequence: String,
-        amount: String? = null
+        amount: String? = null,
+        currency: String? = null,
+        datr: String? = null,
+        hetr: String? = null
     ): String {
         val dateTime = getCurrentDateTime()
 
-        var msg = buildField(Tags.TM, MessageTypes.CANCELLATION_CONFIRMATION_REQUEST)
-        if (amount != null) msg += buildField(Tags.MT, amount)
-        msg += buildField(Tags.STAN, stan) +
-               buildField(Tags.NCAI, ncai) +
-               buildField(Tags.NS, sequence) +
-               buildField(Tags.DA, dateTime.date) +
+        var msg = buildField(Tags.TM, MessageTypes.CANCELLATION_CONFIRMATION_REQUEST) +
+                  buildField(Tags.NCAI, ncai) +
+                  buildField(Tags.NS, sequence) +
+                  buildField(Tags.STAN, stan)
+        if (amount != null) {
+            msg += buildField(Tags.MT, amount)
+            msg += buildField(Tags.DE, if (currency.isNullOrEmpty()) "504" else currency)
+        }
+        if (!datr.isNullOrEmpty()) msg += buildField(Tags.DATR, datr)
+        if (!hetr.isNullOrEmpty()) msg += buildField(Tags.HETR, hetr)
+        msg += buildField(Tags.DA, dateTime.date) +
                buildField(Tags.HE, dateTime.time)
         return msg
     }
