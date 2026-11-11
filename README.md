@@ -293,7 +293,10 @@ throws: on any error they return `success = false` with `error` set.
 val reachable: Boolean = client.testConnection()
 ```
 
-**Network test (TM 009)** — checks the whole till → terminal → NAPS server chain:
+**Network test (TM 009)** — checks the whole till → terminal → NAPS server chain. USB serial
+only: over TCP nothing is sent and `responseCode` is `"UNSUPPORTED"`, because the NapsPay app on
+Sunmi terminals does not implement TM 009 (it answers 902) and a test frame crashed the app on a
+Sunmi P2. Use `testConnection()` to check a TCP terminal is reachable.
 
 ```kotlin
 val net = client.networkTest("01", "00001")
@@ -521,7 +524,7 @@ starts a new operation waits 3 s after the last reply (the confirmations TM 002 
 the life of the app and call `close()` on exit. After a timeout or error the port is closed and the
 next operation reopens it.
 
-**Run a network test when the point-of-sale app starts.** It takes the 30 s wait while no customer
+**Run a network test when the point-of-sale app starts (USB only).** It takes the 30 s wait while no customer
 is waiting, checks the terminal and the bank host, and leaves the port open, so the first sale goes
 straight to the card prompt:
 

@@ -355,10 +355,21 @@ class NapsPayClient(
      * this sends the actual NAPS M2M network test message and
      * verifies the terminal responds RC=000.
      *
+     * USB serial only. Over TCP nothing is sent and the result has responseCode "UNSUPPORTED":
+     * the NapsPay app on Sunmi terminals does not implement TM=009 (it answers TM=101 with
+     * CR=902), and a test frame crashed the app on a Sunmi P2. Use [testConnection] for TCP.
+     *
      * @param registerId Register ID (2 digits)
      * @param cashierId Cashier ID (5 digits)
      */
     suspend fun networkTest(registerId: String, cashierId: String): NetworkTestResult = withContext(Dispatchers.IO) {
+        if (config.transport != TransportType.USB_SERIAL) {
+            return@withContext NetworkTestResult(
+                success = false,
+                responseCode = "UNSUPPORTED",
+                error = "Network test not supported over TCP (the terminal's payment app does not implement TM=009)"
+            )
+        }
         val ncai = registerId + cashierId
         val connection = newTransport()
         val startMs = System.currentTimeMillis()

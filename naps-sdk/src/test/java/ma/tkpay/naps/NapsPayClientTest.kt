@@ -181,6 +181,15 @@ class NapsPayClientTest {
     }
 
     @Test
+    fun networkTest_overTcp_sendsNothing_returnsUnsupported() = runBlocking {
+        // Sunmi NapsPay answers TM=009 with TM=101 / CR=902; a test frame crashed the app.
+        // Port 9 (discard) is never contacted: nothing must be sent over TCP.
+        val result = NapsPayClient(NapsConfig(host = "127.0.0.1", port = 9)).networkTest("01", "00001")
+        assertFalse(result.success)
+        assertEquals("UNSUPPORTED", result.responseCode)
+    }
+
+    @Test
     fun cancelPayment_terminalSilentAfterTm004FailsClosedAsPending() = runBlocking {
         val server = ServerSocket(0)
         val received = mutableListOf<String>()

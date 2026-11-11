@@ -25,6 +25,9 @@ Ported from the Node and C# SDKs, both verified on a live Lane3600 over USB (net
   CR 307. TM 004 repeats that NS and echoes MT, DE, DATR and HETR from TM 103, in spec order.
 - **Void receipt.** When TM 103 carries no receipt, as on the Lane3600, the TM 104 receipt is
   returned as `merchantReceipt` instead of `customerReceipt`.
+- **Network test is USB only.** Over TCP, `networkTest` sends nothing and returns
+  `responseCode = "UNSUPPORTED"`: the NapsPay app on a Sunmi P2 answers TM 009 with TM 101 /
+  CR 902 (it only handles payments and voids over the ECR link), and a test frame crashed the app.
 - **Timeouts.** `networkTest` and `resetPinPad` use `timeout` (default 120 s) instead of a fixed
   10 s, which is too short for the Lane3600.
 

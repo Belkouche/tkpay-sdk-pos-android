@@ -105,7 +105,8 @@ class EmulatorIntegrationTest {
     fun approve_managementOperations() = runBlocking {
         requireMode("approve")
         val network = client.networkTest("01", "00001")
-        assertTrue(network.error, network.success)
+        assertFalse(network.success) // TCP: not sent (Sunmi NapsPay answers TM=009 with 902)
+        assertEquals("UNSUPPORTED", network.responseCode)
 
         val referencing = client.referencing("01", "00001", TlvProtocol.Tide.RECHARGE)
         assertTrue(referencing.error, referencing.success)
