@@ -322,4 +322,19 @@ class TlvProtocolTest {
         assertFalse(TlvProtocol.isCompleteMessage(longFrame.dropLast(1)))
         assertTrue(TlvProtocol.isCompleteMessage(longFrame))
     }
+
+    @Test
+    fun byteLengthsToCharLengths_rewritesFieldAndDpSubTagLengths() {
+        // "Copie Commerçé" is 14 chars but 16 UTF-8 bytes; the Lane3600 declares 016.
+        val dp = "*03000201033016Copie Commerçé*03000202033004NEXT?"
+        val dpBytes = dp.toByteArray(Charsets.UTF_8).size
+        val frame = "001003108010%03d%s013003000!".format(dpBytes, dp).toByteArray(Charsets.UTF_8)
+
+        val converted = TlvProtocol.byteLengthsToCharLengths(String(frame, Charsets.ISO_8859_1))
+        val fields = TlvProtocol.parse(converted)
+
+        assertEquals(dp.replace("033016", "033014"), fields[TlvProtocol.Tags.DP]) // length now in characters
+        assertEquals("000", fields[TlvProtocol.Tags.CR])
+        assertEquals(longFrame, TlvProtocol.byteLengthsToCharLengths(longFrame)) // ASCII unchanged
+    }
 }

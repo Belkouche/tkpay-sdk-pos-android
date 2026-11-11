@@ -593,6 +593,48 @@ object TlvProtocol {
     }
 
     /**
+     * Rewrite a frame whose lengths count bytes into one whose lengths count characters. The
+     * Ingenico Lane3600 over USB counts UTF-8 bytes (a 3-byte character in a DP line made a
+     * character-based walk read 2 characters into the next line); the rest of the SDK counts
+     * characters, as the Sunmi does over TCP. [latin1] holds one character per received byte.
+     * Each value, and each DP sub-tag value, is decoded as UTF-8 and its length rewritten (DP
+     * still capped at 999, as the terminal sends it).
+     */
+    fun byteLengthsToCharLengths(latin1: String): String {
+        val out = StringBuilder(latin1.length)
+        var pos = 0
+        while (pos < latin1.length && latin1[pos] != TERMINATOR_V2 && latin1[pos] != TERMINATOR_V1) {
+            val end = fieldEnd(latin1, pos)
+            if (end < 0 || end > latin1.length) break
+            val tag = latin1.substring(pos, pos + 3)
+            val raw = latin1.substring(pos + 6, end)
+            val value = if (tag == Tags.DP) dpBytesToChars(raw) else fromBytes(raw)
+            out.append(tag).append(lenField(value.length)).append(value)
+            pos = end
+        }
+        return out.append(fromBytes(latin1.substring(pos))).toString()
+    }
+
+    private fun dpBytesToChars(dp: String): String {
+        val out = StringBuilder(dp.length)
+        var i = 0
+        while (i < dp.length) {
+            if (dp[i] == '*' || dp[i] == TERMINATOR_V1) { out.append(dp[i++]); continue }
+            if (i + 6 > dp.length || !dp.substring(i, i + 6).all { it in '0'..'9' }) break
+            val end = i + 6 + dp.substring(i + 3, i + 6).toInt()
+            if (end > dp.length) break
+            val value = fromBytes(dp.substring(i + 6, end))
+            out.append(dp, i, i + 3).append(lenField(value.length)).append(value)
+            i = end
+        }
+        return out.append(fromBytes(dp.substring(i))).toString()
+    }
+
+    private fun fromBytes(latin1: String): String = String(latin1.toByteArray(Charsets.ISO_8859_1), Charsets.UTF_8)
+
+    private fun lenField(n: Int): String = minOf(n, 999).toString().padStart(3, '0')
+
+    /**
      * Mask every card number in a raw TLV frame without changing its length, so
      * the TLV lengths stay valid: NCAR (007) values, DP (010) print-line texts and
      * any card number elsewhere in a value or in trailing bytes. Transports apply

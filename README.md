@@ -320,6 +320,12 @@ dup.merchantReceipt?.let { printReceipt(it) }
 // dup.stan: STAN of the transaction the terminal found (here, the last recorded one)
 ```
 
+On the Ingenico Lane3600, only the last transaction can be reprinted: a duplicate for a given
+STAN answered CR 381, even for a sale made minutes earlier. Its duplicate holds both copies
+(merchant, then customer marked DUPLICATA) and has no STAN tag, so `dup.stan` is null; read the
+STAN from the receipt text. To check a pending void on the Lane, call `printDuplicate` without a
+STAN straight away, before any other transaction.
+
 **Totals (TM 010)** — running batch totals, returned as a receipt:
 
 ```kotlin

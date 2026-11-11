@@ -141,7 +141,8 @@ class UsbSerialConnection(
             }
 
             if (n > 0) {
-                out.append(String(buf, 0, n, Charsets.US_ASCII))
+                // One character per byte: the Lane3600's lengths count bytes.
+                out.append(String(buf, 0, n, Charsets.ISO_8859_1))
                 lastByteAt = System.currentTimeMillis()
                 // The frame ends at a terminator on a field boundary; one inside a value (receipt
                 // lines end with '?') must not cut the reply short.
@@ -154,7 +155,7 @@ class UsbSerialConnection(
 
         if (out.isEmpty()) throw NapsError.invalidResponse("Empty response from terminal")
         // SECURITY: card numbers are masked before the reply leaves the transport
-        return TlvProtocol.maskFrame(out.toString())
+        return TlvProtocol.maskFrame(TlvProtocol.byteLengthsToCharLengths(out.toString()))
     }
 
     /** Drop bytes still waiting on the kept-open port, so they are never read as this reply. */
