@@ -112,6 +112,7 @@ class UsbSerialConnection(
         val terminator = config.resolveProtocolVersion().terminator.toString()
         val frame = if (tlvMessage.endsWith(terminator)) tlvMessage else tlvMessage + terminator
         try {
+            discardPending(p)
             p.write(frame.toByteArray(Charsets.US_ASCII), WRITE_TIMEOUT_MS)
             withTimeout(timeout) { readResponse(p) }.also { lastRxAt = System.currentTimeMillis() }
         } catch (e: kotlinx.coroutines.TimeoutCancellationException) {
@@ -142,7 +143,10 @@ class UsbSerialConnection(
             if (n > 0) {
                 out.append(String(buf, 0, n, Charsets.US_ASCII))
                 lastByteAt = System.currentTimeMillis()
-                if (out.any { it == '!' || it == '?' }) break
+                // A chunk ending in a terminator ends the frame (as the C# and Node readers do);
+                // a '!' or '?' inside receipt text must not cut the reply short.
+                val last = out[out.length - 1]
+                if (last == '!' || last == '?') break
             } else {
                 // No data this poll — bail once we've received something and gone quiet.
                 if (out.isNotEmpty() && System.currentTimeMillis() - lastByteAt >= SILENCE_MS) break
@@ -152,6 +156,12 @@ class UsbSerialConnection(
         if (out.isEmpty()) throw NapsError.invalidResponse("Empty response from terminal")
         // SECURITY: card numbers are masked before the reply leaves the transport
         return TlvProtocol.maskFrame(out.toString())
+    }
+
+    /** Drop bytes still waiting on the kept-open port, so they are never read as this reply. */
+    private fun discardPending(p: UsbSerialPort) {
+        val buf = ByteArray(READ_BUFFER_SIZE)
+        while (p.read(buf, DRAIN_TIMEOUT_MS) > 0) { /* discard */ }
     }
 
     override suspend fun disconnect() = withContext(Dispatchers.IO) {
@@ -205,6 +215,7 @@ class UsbSerialConnection(
         private const val ACTION_USB_PERMISSION = "ma.tkpay.naps.USB_PERMISSION"
         private const val WRITE_TIMEOUT_MS = 5_000
         private const val READ_TIMEOUT_MS = 200
+        private const val DRAIN_TIMEOUT_MS = 50
         private const val READ_BUFFER_SIZE = 8192
         private const val SILENCE_MS = 1_000L
 
