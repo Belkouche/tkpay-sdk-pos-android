@@ -25,6 +25,9 @@ Ported from the Node and C# SDKs, both verified on a live Lane3600 over USB (net
   duplicate holding both copies is ~2,150 chars). A DP declared 999 long now ends at its own '?'
   end marker, found by walking its sub-tags; it used to be cut at 999 chars. Masking, parsing and
   the reader's end-of-reply check share the same field walk (ASCII digits only).
+  A DP really 999 long (no '?') stops at its first non-receipt sub-tag (not 030–039), so it never
+  swallows the fields after it. Card numbers are masked in every DP sub-tag value, not only the
+  text (033).
 - **USB serial: accented text.** The Lane3600 counts field and DP sub-tag lengths in UTF-8 bytes.
   Serial replies were decoded as US-ASCII (accents became '?'); they are now read byte for byte
   and their lengths rewritten in characters before parsing, so accented text comes through.

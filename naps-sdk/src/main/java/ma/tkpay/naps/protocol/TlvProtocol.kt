@@ -586,7 +586,8 @@ object TlvProtocol {
             }
             if (i + 6 > data.length) return data.length + 1 // rest of the receipt not received yet
             val sub = data.subSequence(i, i + 6).toString()
-            if (!sub.all { it in '0'..'9' }) return declaredEnd
+            // Receipt sub-tags are 030–039; anything else is a top-level field, so the DP was really 999.
+            if (!sub.all { it in '0'..'9' } || !sub.startsWith("03")) return declaredEnd
             i += 6 + sub.substring(3).toInt()
         }
         return data.length + 1
@@ -680,7 +681,8 @@ object TlvProtocol {
             if (index + 6 + length > dp.length) break
             val value = dp.substring(index + 6, index + 6 + length)
             out.append(dp, index, index + 6)
-            out.append(if (dp.startsWith(ReceiptTags.CONTENT, index)) maskCardNumbersInText(value) else value)
+            // Every sub-tag value, not only the text (033): a mis-framed field must never leak a card number.
+            out.append(maskCardNumbersInText(value))
             index += 6 + length
         }
         out.append(maskCardNumbersInText(dp.substring(index)))

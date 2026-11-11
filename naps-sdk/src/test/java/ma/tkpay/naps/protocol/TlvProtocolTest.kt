@@ -337,4 +337,28 @@ class TlvProtocolTest {
         assertEquals("000", fields[TlvProtocol.Tags.CR])
         assertEquals(longFrame, TlvProtocol.byteLengthsToCharLengths(longFrame)) // ASCII unchanged
     }
+
+    @Test
+    fun parse_dpReally999WithoutEndMarker_doesNotSwallowNextFields() {
+        val dp = StringBuilder()
+        var n = 0
+        while (999 - dp.length > 75) dp.append("*030002%02d031001S032001G033040%s".format(n++ % 100, "X".repeat(40)))
+        val rest = 999 - dp.length - 7
+        dp.append("*033%03d%s".format(rest, "X".repeat(rest))) // exactly 999 chars, no end marker
+
+        val fields = TlvProtocol.parse("001003108" + "010999" + dp + "013003000" + "0070165167940000003315" + "!")
+
+        assertEquals(dp.toString(), fields[TlvProtocol.Tags.DP])
+        assertEquals("000", fields[TlvProtocol.Tags.CR])
+        assertEquals("516794******3315", fields[TlvProtocol.Tags.NCAR])
+    }
+
+    @Test
+    fun parse_masksCardNumberInEveryDpSubTag() {
+        // A 16-digit number in a non-text sub-tag (031) must be masked too.
+        val dp = "*030002" + "01" + "031016" + "5167940000003315" + "033004" + "TEXT" + "?"
+        val masked = TlvProtocol.parse(TlvProtocol.buildField(TlvProtocol.Tags.DP, dp) + "!")[TlvProtocol.Tags.DP]!!
+        assertFalse(masked.contains("5167940000003315"))
+        assertTrue(masked.contains("516794******3315"))
+    }
 }
