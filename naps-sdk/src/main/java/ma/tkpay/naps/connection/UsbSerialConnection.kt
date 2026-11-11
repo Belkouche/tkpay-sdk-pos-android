@@ -143,10 +143,9 @@ class UsbSerialConnection(
             if (n > 0) {
                 out.append(String(buf, 0, n, Charsets.US_ASCII))
                 lastByteAt = System.currentTimeMillis()
-                // A chunk ending in a terminator ends the frame (as the C# and Node readers do);
-                // a '!' or '?' inside receipt text must not cut the reply short.
-                val last = out[out.length - 1]
-                if (last == '!' || last == '?') break
+                // The frame ends at a terminator on a field boundary; one inside a value (receipt
+                // lines end with '?') must not cut the reply short.
+                if (TlvProtocol.isCompleteMessage(out)) break
             } else {
                 // No data this poll — bail once we've received something and gone quiet.
                 if (out.isNotEmpty() && System.currentTimeMillis() - lastByteAt >= SILENCE_MS) break

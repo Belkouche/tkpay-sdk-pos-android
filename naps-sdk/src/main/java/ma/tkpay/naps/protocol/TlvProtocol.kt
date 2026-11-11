@@ -445,6 +445,29 @@ object TlvProtocol {
     }
 
     /**
+     * True once [buf] holds a complete message: walking the fields by their length lands on a
+     * '!'/'?' terminator. A terminator inside a value (receipt lines end with '?') is data, so a
+     * read that happens to stop right after one is not taken as the end. If the data is not TLV
+     * (the Lane3600 writes 999 as the length of a longer receipt), a trailing terminator is
+     * accepted as the end.
+     */
+    fun isCompleteMessage(buf: CharSequence): Boolean {
+        var pos = 0
+        while (pos < buf.length) {
+            val c = buf[pos]
+            if (c == TERMINATOR_V2 || c == TERMINATOR_V1) return true
+            if (pos + 6 > buf.length) return false
+            val header = buf.subSequence(pos, pos + 6)
+            if (!header.all { it.isDigit() }) {
+                val last = buf[buf.length - 1]
+                return last == TERMINATOR_V2 || last == TERMINATOR_V1
+            }
+            pos += 6 + header.subSequence(3, 6).toString().toInt()
+        }
+        return false
+    }
+
+    /**
      * Parse TLV string into fields map
      */
     fun parse(rawTlvString: String): Map<String, String> {

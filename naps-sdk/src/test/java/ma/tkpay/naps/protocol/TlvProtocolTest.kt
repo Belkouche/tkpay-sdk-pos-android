@@ -280,4 +280,16 @@ class TlvProtocolTest {
         val confirm = TlvProtocol.parse(tlv)
         assertFalse("NSA must not be sent in TM=004", confirm.containsKey(TlvProtocol.Tags.NSA))
     }
+
+    @Test
+    fun isCompleteMessage_onlyAtTerminatorOnFieldBoundary() {
+        assertTrue(TlvProtocol.isCompleteMessage("001003109013003000!"))
+        assertFalse(TlvProtocol.isCompleteMessage("001003109013003000"))
+        assertFalse(TlvProtocol.isCompleteMessage("001003108010012LINE1?LINE2?"))   // '?' inside DP
+        assertTrue(TlvProtocol.isCompleteMessage("001003108010012LINE1?LINE2?013003000!"))
+        assertFalse(TlvProtocol.isCompleteMessage("001003108010014MERCI! A BIENT")) // '!' inside DP
+        assertFalse(TlvProtocol.isCompleteMessage("00100"))
+        assertTrue(TlvProtocol.isCompleteMessage("garbage!"))                        // non-TLV fallback
+        assertFalse(TlvProtocol.isCompleteMessage("garbage"))
+    }
 }

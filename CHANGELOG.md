@@ -16,6 +16,11 @@ Ported from the Node and C# SDKs, both verified on a live Lane3600 over USB (net
   payment 0.5 s after a network test was refused with CR 100 without a card prompt). A request
   that starts a new operation waits 3 s after the last reply; TM 002 / TM 004 wait 0.5 s.
   Requests end with the protocol terminator ('!' v2, '?' v1).
+- **Reader (USB and TCP): end of reply on a field boundary.** A reply is complete when walking
+  its fields by length lands on a '!'/'?' terminator. The serial reader used to stop at the first
+  '!' or '?' anywhere, and the TCP reader whenever a read ended on one; receipt lines inside DP
+  end with '?', so a reply could be cut short. Non-TLV data (the Lane3600 writes 999 as the
+  length of a longer receipt) still ends on a trailing terminator.
 - **USB serial: one port for the life of the client.** `NapsPayClient` keeps the USB port open
   between operations instead of reopening it each time; `close()` releases it. After a timeout
   or error the port is closed, so a late reply is never read as the answer to the next request.
