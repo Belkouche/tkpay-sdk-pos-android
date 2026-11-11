@@ -21,6 +21,10 @@ Ported from the Node and C# SDKs, both verified on a live Lane3600 over USB (net
   '!' or '?' anywhere, and the TCP reader whenever a read ended on one; receipt lines inside DP
   end with '?', so a reply could be cut short. Non-TLV data (the Lane3600 writes 999 as the
   length of a longer receipt) still ends on a trailing terminator.
+- **Long receipts.** The Lane3600 writes 999 as the DP length when the receipt is longer (a
+  duplicate holding both copies is ~2,150 chars). A DP declared 999 long now ends at its own '?'
+  end marker, found by walking its sub-tags; it used to be cut at 999 chars. Masking, parsing and
+  the reader's end-of-reply check share the same field walk (ASCII digits only).
 - **USB serial: one port for the life of the client.** `NapsPayClient` keeps the USB port open
   between operations instead of reopening it each time; `close()` releases it. After a timeout
   or error the port is closed, so a late reply is never read as the answer to the next request.

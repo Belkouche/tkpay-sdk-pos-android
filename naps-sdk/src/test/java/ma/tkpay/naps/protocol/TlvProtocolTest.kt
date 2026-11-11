@@ -302,4 +302,24 @@ class TlvProtocolTest {
             org.junit.Assert.fail("expected NapsError")
         } catch (e: ma.tkpay.naps.models.NapsError) { }
     }
+
+    // A receipt longer than 999 chars, as the Lane3600 sends it: DP declared 999 long.
+    private val longDp = (0 until 25).joinToString("") { n ->
+        "*030002%02d031001S032001G033040%s".format(n, "X".repeat(40))
+    } + "?"
+    private val longFrame = "001003108" + "010999" + longDp + "013003000" + "!"
+
+    @Test
+    fun parse_dpDeclared999_readsWholeReceiptAndFollowingFields() {
+        val fields = TlvProtocol.parse(longFrame)
+        assertEquals(longDp, fields[TlvProtocol.Tags.DP])
+        assertEquals("000", fields[TlvProtocol.Tags.CR])
+    }
+
+    @Test
+    fun isCompleteMessage_dpDeclared999_waitsForWholeReceipt() {
+        assertFalse(TlvProtocol.isCompleteMessage(longFrame.substring(0, 1200)))
+        assertFalse(TlvProtocol.isCompleteMessage(longFrame.dropLast(1)))
+        assertTrue(TlvProtocol.isCompleteMessage(longFrame))
+    }
 }

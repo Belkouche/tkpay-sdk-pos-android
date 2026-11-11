@@ -473,12 +473,12 @@ object TlvProtocol {
             val c = buf[pos]
             if (c == TERMINATOR_V2 || c == TERMINATOR_V1) return true
             if (pos + 6 > buf.length) return false
-            val header = buf.subSequence(pos, pos + 6)
-            if (!header.all { it.isDigit() }) {
+            val end = fieldEnd(buf, pos)
+            if (end < 0) {
                 val last = buf[buf.length - 1]
                 return last == TERMINATOR_V2 || last == TERMINATOR_V1
             }
-            pos += 6 + header.subSequence(3, 6).toString().toInt()
+            pos = end
         }
         return false
     }
@@ -501,21 +501,11 @@ object TlvProtocol {
             val c = tlvString[index]
             if (c == TERMINATOR_V2 || c == TERMINATOR_V1) break
 
-            // Need at least 6 chars for tag + length
-            if (index + 6 > tlvString.length) break
+            val end = fieldEnd(tlvString, index)
+            if (end < 0 || end > tlvString.length) break
 
             val tag = tlvString.substring(index, index + 3)
-            val lengthStr = tlvString.substring(index + 3, index + 6)
-
-            // Validate length is numeric
-            if (!lengthStr.all { it.isDigit() }) break
-
-            val length = lengthStr.toInt()
-
-            // Check if we have enough data for the value
-            if (index + 6 + length > tlvString.length) break
-
-            var value = tlvString.substring(index + 6, index + 6 + length)
+            var value = tlvString.substring(index + 6, end)
 
             // SECURITY: NCAR (007) in the standard masked form, e.g. 516794******3315
             if (tag == Tags.NCAR) {
@@ -523,7 +513,7 @@ object TlvProtocol {
             }
 
             fields[tag] = value
-            index += 6 + length
+            index = end
         }
 
         return fields
@@ -575,6 +565,34 @@ object TlvProtocol {
     }
 
     /**
+     * End index (exclusive) of the field starting at [pos], -1 if its header is not TLV. The
+     * result can be past the end of [data] when the field is not fully received yet. The Ingenico
+     * Lane3600 caps the DP length at 999 when the receipt is longer (a duplicate with both copies
+     * is ~2,150 chars), so a DP declared 999 long ends at its own '?' end marker, found by walking
+     * its sub-tags and '*' line separators.
+     */
+    internal fun fieldEnd(data: CharSequence, pos: Int): Int {
+        if (pos + 6 > data.length) return data.length + 1
+        val header = data.subSequence(pos, pos + 6).toString()
+        if (!header.all { it in '0'..'9' }) return -1
+        val declaredEnd = pos + 6 + header.substring(3).toInt()
+        if (header != Tags.DP + "999") return declaredEnd
+
+        var i = pos + 6
+        while (i < data.length) {
+            when (data[i]) {
+                '*' -> { i++; continue }
+                TERMINATOR_V1 -> return maxOf(i + 1, declaredEnd)
+            }
+            if (i + 6 > data.length) return data.length + 1 // rest of the receipt not received yet
+            val sub = data.subSequence(i, i + 6).toString()
+            if (!sub.all { it in '0'..'9' }) return declaredEnd
+            i += 6 + sub.substring(3).toInt()
+        }
+        return data.length + 1
+    }
+
+    /**
      * Mask every card number in a raw TLV frame without changing its length, so
      * the TLV lengths stay valid: NCAR (007) values, DP (010) print-line texts and
      * any card number elsewhere in a value or in trailing bytes. Transports apply
@@ -586,13 +604,11 @@ object TlvProtocol {
         while (index + 6 <= frame.length) {
             val c = frame[index]
             if (c == TERMINATOR_V2 || c == TERMINATOR_V1) break
-            val lengthStr = frame.substring(index + 3, index + 6)
-            if (!lengthStr.all { it.isDigit() }) break
-            val length = lengthStr.toInt()
-            if (index + 6 + length > frame.length) break
+            val end = fieldEnd(frame, index)
+            if (end < 0 || end > frame.length) break
 
             val tag = frame.substring(index, index + 3)
-            val value = frame.substring(index + 6, index + 6 + length)
+            val value = frame.substring(index + 6, end)
             out.append(frame, index, index + 6)
             out.append(
                 when (tag) {
@@ -601,7 +617,7 @@ object TlvProtocol {
                     else -> maskCardNumbersInText(value)
                 }
             )
-            index += 6 + length
+            index = end
         }
         // Terminator, trailing bytes or an unparseable remainder
         out.append(maskCardNumbersInText(frame.substring(index)))
