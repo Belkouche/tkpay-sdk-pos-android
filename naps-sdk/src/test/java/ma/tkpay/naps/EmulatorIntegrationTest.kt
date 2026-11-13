@@ -12,6 +12,7 @@ import ma.tkpay.naps.protocol.TlvProtocol
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Assume.assumeTrue
@@ -105,7 +106,8 @@ class EmulatorIntegrationTest {
     fun approve_managementOperations() = runBlocking {
         requireMode("approve")
         val network = client.networkTest("01", "00001")
-        assertTrue(network.error, network.success)
+        assertFalse(network.success) // TCP: not sent (Sunmi NapsPay answers TM=009 with 902)
+        assertEquals("UNSUPPORTED", network.responseCode)
 
         val referencing = client.referencing("01", "00001", TlvProtocol.Tide.RECHARGE)
         assertTrue(referencing.error, referencing.success)
@@ -181,25 +183,25 @@ class EmulatorIntegrationTest {
     }
 
     @Test
-    fun void995_isPendingWithStanAndReceipt() {
+    fun void995_isPendingWithStan() {
         requireMode("void_995")
         val result = void()
         assertFalse(result.success)
         assertTrue(result.pending)
         assertEquals("995", result.responseCode)
         assertEquals("000123", result.stan)
-        assertNotNull(result.merchantReceipt)
+        assertNull(result.merchantReceipt) // TM 103 carries no receipt on live terminals
     }
 
     @Test
-    fun voidNoConfirm_isPendingWithStanAndReceipt() {
+    fun voidNoConfirm_isPendingWithStan() {
         requireMode("void_no_confirm")
         val result = void()
         assertFalse(result.success)
         assertTrue(result.pending)
         assertEquals("", result.responseCode)
         assertEquals("000123", result.stan)
-        assertNotNull(result.merchantReceipt)
+        assertNull(result.merchantReceipt) // TM 103 carries no receipt on live terminals
     }
 
     @Test
@@ -247,25 +249,25 @@ class EmulatorIntegrationTest {
         requireMode("approve")
         val result = pay(10.00)
         assertTrue(result.error, result.isApproved())
-        assertReceipt(saleReceipt("10.00", result.stan!!, "DEBIT", "Copie Commercant"), result.merchantReceipt)
+        assertReceipt(saleReceipt("10.00", result.stan!!, "DEBIT", "Copie Commerçant"), result.merchantReceipt)
         assertReceipt(saleReceipt("10.00", result.stan!!, "DEBIT", "Copie Client"), result.customerReceipt)
     }
 
     @Test
-    fun approve_voidReceiptsMerchantAndCustomer() {
+    fun approve_voidReceiptMerchantCopyFromTm104() {
         requireMode("approve")
         val result = runBlocking { client.cancelPayment("000123", "01", "00001", "000045", 1000L) }
         assertTrue(result.error, result.success)
-        // TM 103 copy is about the original sale (STAN 000123), TM 104 copy carries the void STAN
-        assertReceipt(saleReceipt("10.00", "000123", "ANNULATION", "Copie Commercant"), result.merchantReceipt)
-        assertReceipt(saleReceipt("10.00", result.stan!!, "ANNULATION", "Copie Client"), result.customerReceipt)
+        // Live terminals: TM 103 has no receipt; the TM 104 receipt, carrying the void STAN, is the merchant copy
+        assertReceipt(saleReceipt("10.00", result.stan!!, "ANNULATION", "Copie Commerçant"), result.merchantReceipt)
+        assertNull(result.customerReceipt)
     }
 
     @Test
     fun approve_duplicateTotalsAndReferencingReceipts() = runBlocking {
         requireMode("approve")
         assertReceipt(
-            saleReceipt("0.00", "<N>", "DEBIT", "Copie Commercant"),
+            saleReceipt("0.00", "<N>", "DEBIT", "Copie Commerçant"),
             client.printDuplicate("01", "00001").merchantReceipt
         )
         assertReceipt(

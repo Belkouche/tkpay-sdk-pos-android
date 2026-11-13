@@ -61,12 +61,16 @@ class NapsPayClient(
 ) {
 
     private val sequenceGenerator = AtomicInteger(1)
+    private var serial: UsbSerialConnection? = null
 
     /**
      * Build the transport for this client's [config].
      *
-     * TCP is the default. For [TransportType.USB_SERIAL] a non-null [context] is
-     * required (the USB stack needs it), so construct the client with a Context.
+     * TCP is the default and opens a new connection per operation. For
+     * [TransportType.USB_SERIAL] a non-null [context] is required (the USB stack needs it),
+     * and one port is kept open for the life of the client: the Ingenico Lane3600 answers late
+     * for ~30 s after the port opens, so reopening it for every operation would delay each one.
+     * Call [close] when the app is done with the terminal.
      */
     private fun newTransport(): NapsTransport = when (config.transport) {
         TransportType.TCP_SOCKET -> NapsConnection(config)
@@ -75,8 +79,23 @@ class NapsPayClient(
                 ?: throw NapsError.connectionFailed(
                     IllegalStateException("USB serial transport requires a Context: use NapsPayClient(config, context)")
                 )
-            UsbSerialConnection(ctx, config)
+            KeptOpenTransport(serial ?: UsbSerialConnection(ctx, config).also { serial = it })
         }
+    }
+
+    /** Close the USB serial port kept open between operations (no-op for TCP). */
+    suspend fun close() {
+        serial?.disconnect()
+        serial = null
+    }
+
+    /** Lends the shared serial port to one operation; its disconnect keeps the port open. */
+    private class KeptOpenTransport(private val inner: NapsTransport) : NapsTransport {
+        override val isConnected: Boolean get() = inner.isConnected
+        override suspend fun connect() { if (!inner.isConnected) inner.connect() }
+        override suspend fun sendAndReceive(tlvMessage: String, timeout: Long): String =
+            inner.sendAndReceive(tlvMessage, timeout)
+        override suspend fun disconnect() {}
     }
 
     /**
@@ -336,10 +355,21 @@ class NapsPayClient(
      * this sends the actual NAPS M2M network test message and
      * verifies the terminal responds RC=000.
      *
+     * USB serial only. Over TCP nothing is sent and the result has responseCode "UNSUPPORTED":
+     * the NapsPay app on Sunmi terminals does not implement TM=009 (it answers TM=101 with
+     * CR=902), and a test frame crashed the app on a Sunmi P2. Use [testConnection] for TCP.
+     *
      * @param registerId Register ID (2 digits)
      * @param cashierId Cashier ID (5 digits)
      */
     suspend fun networkTest(registerId: String, cashierId: String): NetworkTestResult = withContext(Dispatchers.IO) {
+        if (config.transport != TransportType.USB_SERIAL) {
+            return@withContext NetworkTestResult(
+                success = false,
+                responseCode = "UNSUPPORTED",
+                error = "Network test not supported over TCP (the terminal's payment app does not implement TM=009)"
+            )
+        }
         val ncai = registerId + cashierId
         val connection = newTransport()
         val startMs = System.currentTimeMillis()
@@ -347,7 +377,7 @@ class NapsPayClient(
         try {
             connection.connect()
             val tlvRequest = TlvProtocol.buildNetworkTestRequest(ncai, generateSequence())
-            val tlvResponse = connection.sendAndReceive(tlvRequest, timeout = 10_000)
+            val tlvResponse = connection.sendAndReceive(tlvRequest, timeout = config.timeout)
             val fields = TlvProtocol.parse(tlvResponse)
             val responseCode = fields[TlvProtocol.Tags.CR] ?: ""
 
@@ -380,7 +410,8 @@ class NapsPayClient(
      * @param stan STAN of the transaction to cancel
      * @param registerId Register ID (2 digits)
      * @param cashierId Cashier ID (5 digits)
-     * @param sequence Sequence number of the original transaction
+     * @param sequence Sequence number of the payment being voided, sent as NSA (005) in TM=003.
+     *   The void itself gets a new NS, repeated in TM=004 (spec v2 §4.3/§4.4).
      * @param amountCentimes Original amount in centimes (required for v5.4.4+)
      */
     suspend fun cancelPayment(
@@ -397,7 +428,8 @@ class NapsPayClient(
             connection.connect()
 
             // Phase 1: TM=003 → MT=103
-            val tlvRequest = TlvProtocol.buildCancellationRequest(stan, ncai, sequence, amountCentimes)
+            val voidSequence = generateSequence()
+            val tlvRequest = TlvProtocol.buildCancellationRequest(stan, ncai, voidSequence, amountCentimes, sequence)
             val tlvResponse = connection.sendAndReceive(tlvRequest, timeout = config.timeout)
             val fields = TlvProtocol.parse(tlvResponse)
             val responseCode = fields[TlvProtocol.Tags.CR] ?: ""
@@ -422,8 +454,11 @@ class NapsPayClient(
             val confirmRequest = TlvProtocol.buildCancellationConfirmation(
                 fields[TlvProtocol.Tags.STAN] ?: stan,
                 ncai,
-                sequence,
-                fields[TlvProtocol.Tags.MT]
+                voidSequence,
+                fields[TlvProtocol.Tags.MT],
+                fields[TlvProtocol.Tags.DE],
+                fields[TlvProtocol.Tags.DATR],
+                fields[TlvProtocol.Tags.HETR]
             )
             val confirmFields = try {
                 TlvProtocol.parse(
@@ -460,10 +495,16 @@ class NapsPayClient(
         confirmResponse: Map<String, String>?
     ): CancellationResult {
         val originalStan = cancelResponse[TlvProtocol.Tags.STAN] ?: stan
-        val merchantReceipt = cancelResponse[TlvProtocol.Tags.DP]?.let {
+        val tm103Receipt = cancelResponse[TlvProtocol.Tags.DP]?.let {
             ReceiptParser.parse(it, ReceiptType.MERCHANT)
         }
-        val customerReceipt = confirmResponse?.get(TlvProtocol.Tags.DP)?.let {
+        val confirmDp = confirmResponse?.get(TlvProtocol.Tags.DP)
+        // Ingenico Lane3600: MT=103 has no receipt and MT=104 carries the only void receipt
+        // ("SIGNATURE CLIENT"), so it is the merchant copy.
+        val laneVoidReceipt = tm103Receipt == null && confirmDp != null
+        val merchantReceipt = tm103Receipt
+            ?: if (laneVoidReceipt) ReceiptParser.parse(confirmDp!!, ReceiptType.MERCHANT) else null
+        val customerReceipt = if (laneVoidReceipt) null else confirmDp?.let {
             ReceiptParser.parse(it, ReceiptType.CUSTOMER)
         }
         val cr = confirmResponse?.get(TlvProtocol.Tags.CR) ?: ""
@@ -562,7 +603,7 @@ class NapsPayClient(
         try {
             connection.connect()
             val tlvRequest = TlvProtocol.buildResetRequest(ncai, generateSequence())
-            val tlvResponse = connection.sendAndReceive(tlvRequest, timeout = 10_000)
+            val tlvResponse = connection.sendAndReceive(tlvRequest, timeout = config.timeout)
             val fields = TlvProtocol.parse(tlvResponse)
             val responseCode = fields[TlvProtocol.Tags.CR] ?: ""
 

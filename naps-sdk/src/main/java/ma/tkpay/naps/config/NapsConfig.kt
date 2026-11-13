@@ -40,10 +40,9 @@ enum class TransportType {
  * @property serialPortName USB serial device name/path. Null (default) = auto-discover
  *   the Ingenico device by vendor id [UsbSerialDiscovery.INGENICO_VENDOR_ID].
  * @property serialBaudRate USB serial baud rate (default: 115200).
- * @property protocolVersion NAPS TLV protocol version. Null (default) resolves per
- *   transport via [resolveProtocolVersion]: TCP → [ProtocolVersion.V2] ('!'),
- *   USB serial → [ProtocolVersion.V1] ('?'). Set explicitly to override. The read
- *   loop tolerates both terminators regardless; this only chooses the primary one.
+ * @property protocolVersion NAPS TLV protocol version. Null (default) = [ProtocolVersion.V2]
+ *   ('!') on both transports: the Lane3600 over USB ends every reply with '!'. Set
+ *   [ProtocolVersion.V1] for a legacy terminal. The read loop tolerates both terminators.
  */
 data class NapsConfig(
     val host: String? = null,
@@ -80,16 +79,8 @@ data class NapsConfig(
         )
     }
 
-    /**
-     * Effective protocol version: the explicit [protocolVersion] if set, otherwise
-     * the per-transport default — USB serial → [ProtocolVersion.V1], TCP →
-     * [ProtocolVersion.V2].
-     */
-    fun resolveProtocolVersion(): ProtocolVersion =
-        protocolVersion ?: when (transport) {
-            TransportType.USB_SERIAL -> ProtocolVersion.V1
-            TransportType.TCP_SOCKET -> ProtocolVersion.V2
-        }
+    /** Effective protocol version: the explicit [protocolVersion] if set, otherwise [ProtocolVersion.V2]. */
+    fun resolveProtocolVersion(): ProtocolVersion = protocolVersion ?: ProtocolVersion.V2
 
     init {
         if (transport == TransportType.TCP_SOCKET) {

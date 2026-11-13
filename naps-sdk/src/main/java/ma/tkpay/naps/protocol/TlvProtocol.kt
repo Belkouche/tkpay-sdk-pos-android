@@ -261,52 +261,66 @@ object TlvProtocol {
     fun toCentimes(amount: Double): Long = Math.round(amount * 100)
 
     /**
-     * Build cancellation request TLV (TM=003)
+     * Build cancellation request TLV (TM=003), spec v2 §4.3.
      *
-     * NapsPay v5.4.4+ requires the original amount (TAG 002) in the frame.
-     * Pass [amountCentimes] when targeting v5.4.4+.
+     * [sequence] is the void's own NS (004), a new number independent of the payment; TM=004
+     * must repeat it. [originalSequence], the payment's sequence, goes in NSA (005). NapsPay
+     * v5.4.4+ requires the original amount (TAG 002). Field order matches the frame the Ingenico
+     * Lane3600 accepted: TM, NCAI, NS, DA, HE, DATR, HETR, STAN, [MT], [NSA]. A frame with no NS
+     * was refused by the Lane3600 with CR 307 (format error).
      */
     fun buildCancellationRequest(
         stan: String,
         ncai: String,
         sequence: String,
-        amountCentimes: Long? = null
+        amountCentimes: Long? = null,
+        originalSequence: String? = null
     ): String {
         val dateTime = getCurrentDateTime()
 
-        var msg = buildField(Tags.TM, MessageTypes.CANCELLATION_REQUEST)
+        var msg = buildField(Tags.TM, MessageTypes.CANCELLATION_REQUEST) +
+                  buildField(Tags.NCAI, ncai) +
+                  buildField(Tags.NS, sequence) +
+                  buildField(Tags.DA, dateTime.date) +
+                  buildField(Tags.HE, dateTime.time) +
+                  buildField(Tags.DATR, dateTime.date) +
+                  buildField(Tags.HETR, dateTime.time) +
+                  buildField(Tags.STAN, stan)
         if (amountCentimes != null) msg += buildField(Tags.MT, amountCentimes.toString())
-        msg += buildField(Tags.STAN, stan) +
-               buildField(Tags.NCAI, ncai) +
-               buildField(Tags.NSA, sequence) +
-               buildField(Tags.DA, dateTime.date) +
-               buildField(Tags.HE, dateTime.time)
+        if (!originalSequence.isNullOrEmpty()) msg += buildField(Tags.NSA, originalSequence)
         return msg
     }
 
     /**
-     * Build cancellation confirmation request TLV (TM=004)
+     * Build cancellation confirmation request TLV (TM=004), spec v2 §4.4.
      *
-     * Sent on the same connection after receiving MT=103 from TM=003.
-     * [sequence] goes in NS (004), never NSA (005): spec §4.4 requires
-     * 004.NS = the sequence of the TM=003 it confirms.
-     * [amount] must echo the amount (TAG 002, 12-digit) from the MT=103
-     * response — omitting it is refused with CR=909 on NapsPay v5.4.4+.
+     * Sent on the same connection after receiving MT=103 from TM=003. Spec fields and order:
+     * TM, NCAI, NS (same as TM=003), STAN, MT, DE, DATR, HETR, DA, HE. [amount], [currency],
+     * [datr] and [hetr] are echoed from MT=103; omitting the amount is refused with CR=909 on
+     * NapsPay v5.4.4+. No NSA: the sequence goes in NS.
      */
     fun buildCancellationConfirmation(
         stan: String,
         ncai: String,
         sequence: String,
-        amount: String? = null
+        amount: String? = null,
+        currency: String? = null,
+        datr: String? = null,
+        hetr: String? = null
     ): String {
         val dateTime = getCurrentDateTime()
 
-        var msg = buildField(Tags.TM, MessageTypes.CANCELLATION_CONFIRMATION_REQUEST)
-        if (amount != null) msg += buildField(Tags.MT, amount)
-        msg += buildField(Tags.STAN, stan) +
-               buildField(Tags.NCAI, ncai) +
-               buildField(Tags.NS, sequence) +
-               buildField(Tags.DA, dateTime.date) +
+        var msg = buildField(Tags.TM, MessageTypes.CANCELLATION_CONFIRMATION_REQUEST) +
+                  buildField(Tags.NCAI, ncai) +
+                  buildField(Tags.NS, sequence) +
+                  buildField(Tags.STAN, stan)
+        if (amount != null) {
+            msg += buildField(Tags.MT, amount)
+            msg += buildField(Tags.DE, if (currency.isNullOrEmpty()) "504" else currency)
+        }
+        if (!datr.isNullOrEmpty()) msg += buildField(Tags.DATR, datr)
+        if (!hetr.isNullOrEmpty()) msg += buildField(Tags.HETR, hetr)
+        msg += buildField(Tags.DA, dateTime.date) +
                buildField(Tags.HE, dateTime.time)
         return msg
     }
@@ -430,6 +444,45 @@ object TlvProtocol {
         return msg
     }
 
+    /** Largest reply accepted, in characters (replies seen are ~2 KB). */
+    const val MAX_RESPONSE_CHARS = 64 * 1024
+
+    /**
+     * Reader check after each chunk: throws past [MAX_RESPONSE_CHARS], and walks the fields
+     * ([isCompleteMessage]) only when the data ends with '!' or '?'. A reply ending otherwise
+     * closes on silence.
+     */
+    fun isCompleteResponse(buf: CharSequence): Boolean {
+        if (buf.length > MAX_RESPONSE_CHARS) {
+            throw NapsError.invalidResponse("Response larger than $MAX_RESPONSE_CHARS characters")
+        }
+        val last = buf.lastOrNull() ?: return false
+        return (last == TERMINATOR_V2 || last == TERMINATOR_V1) && isCompleteMessage(buf)
+    }
+
+    /**
+     * True once [buf] holds a complete message: walking the fields by their length lands on a
+     * '!'/'?' terminator. A terminator inside a value (receipt lines end with '?') is data, so a
+     * read that happens to stop right after one is not taken as the end. If the data is not TLV
+     * (the Lane3600 writes 999 as the length of a longer receipt), a trailing terminator is
+     * accepted as the end.
+     */
+    fun isCompleteMessage(buf: CharSequence): Boolean {
+        var pos = 0
+        while (pos < buf.length) {
+            val c = buf[pos]
+            if (c == TERMINATOR_V2 || c == TERMINATOR_V1) return true
+            if (pos + 6 > buf.length) return false
+            val end = fieldEnd(buf, pos)
+            if (end < 0) {
+                val last = buf[buf.length - 1]
+                return last == TERMINATOR_V2 || last == TERMINATOR_V1
+            }
+            pos = end
+        }
+        return false
+    }
+
     /**
      * Parse TLV string into fields map
      */
@@ -448,21 +501,11 @@ object TlvProtocol {
             val c = tlvString[index]
             if (c == TERMINATOR_V2 || c == TERMINATOR_V1) break
 
-            // Need at least 6 chars for tag + length
-            if (index + 6 > tlvString.length) break
+            val end = fieldEnd(tlvString, index)
+            if (end < 0 || end > tlvString.length) break
 
             val tag = tlvString.substring(index, index + 3)
-            val lengthStr = tlvString.substring(index + 3, index + 6)
-
-            // Validate length is numeric
-            if (!lengthStr.all { it.isDigit() }) break
-
-            val length = lengthStr.toInt()
-
-            // Check if we have enough data for the value
-            if (index + 6 + length > tlvString.length) break
-
-            var value = tlvString.substring(index + 6, index + 6 + length)
+            var value = tlvString.substring(index + 6, end)
 
             // SECURITY: NCAR (007) in the standard masked form, e.g. 516794******3315
             if (tag == Tags.NCAR) {
@@ -470,7 +513,7 @@ object TlvProtocol {
             }
 
             fields[tag] = value
-            index += 6 + length
+            index = end
         }
 
         return fields
@@ -522,6 +565,77 @@ object TlvProtocol {
     }
 
     /**
+     * End index (exclusive) of the field starting at [pos], -1 if its header is not TLV. The
+     * result can be past the end of [data] when the field is not fully received yet. The Ingenico
+     * Lane3600 caps the DP length at 999 when the receipt is longer (a duplicate with both copies
+     * is ~2,150 chars), so a DP declared 999 long ends at its own '?' end marker, found by walking
+     * its sub-tags and '*' line separators.
+     */
+    internal fun fieldEnd(data: CharSequence, pos: Int): Int {
+        if (pos + 6 > data.length) return data.length + 1
+        val header = data.subSequence(pos, pos + 6).toString()
+        if (!header.all { it in '0'..'9' }) return -1
+        val declaredEnd = pos + 6 + header.substring(3).toInt()
+        if (header != Tags.DP + "999") return declaredEnd
+
+        var i = pos + 6
+        while (i < data.length) {
+            when (data[i]) {
+                '*' -> { i++; continue }
+                TERMINATOR_V1 -> return maxOf(i + 1, declaredEnd)
+            }
+            if (i + 6 > data.length) return data.length + 1 // rest of the receipt not received yet
+            val sub = data.subSequence(i, i + 6).toString()
+            // Receipt sub-tags are 030–039; anything else is a top-level field, so the DP was really 999.
+            if (!sub.all { it in '0'..'9' } || !sub.startsWith("03")) return declaredEnd
+            i += 6 + sub.substring(3).toInt()
+        }
+        return data.length + 1
+    }
+
+    /**
+     * Rewrite a frame whose lengths count bytes into one whose lengths count characters. The
+     * Ingenico Lane3600 over USB counts UTF-8 bytes (a 3-byte character in a DP line made a
+     * character-based walk read 2 characters into the next line); the rest of the SDK counts
+     * characters, as the Sunmi does over TCP. [latin1] holds one character per received byte.
+     * Each value, and each DP sub-tag value, is decoded as UTF-8 and its length rewritten (DP
+     * still capped at 999, as the terminal sends it).
+     */
+    fun byteLengthsToCharLengths(latin1: String): String {
+        val out = StringBuilder(latin1.length)
+        var pos = 0
+        while (pos < latin1.length && latin1[pos] != TERMINATOR_V2 && latin1[pos] != TERMINATOR_V1) {
+            val end = fieldEnd(latin1, pos)
+            if (end < 0 || end > latin1.length) break
+            val tag = latin1.substring(pos, pos + 3)
+            val raw = latin1.substring(pos + 6, end)
+            val value = if (tag == Tags.DP) dpBytesToChars(raw) else fromBytes(raw)
+            out.append(tag).append(lenField(value.length)).append(value)
+            pos = end
+        }
+        return out.append(fromBytes(latin1.substring(pos))).toString()
+    }
+
+    private fun dpBytesToChars(dp: String): String {
+        val out = StringBuilder(dp.length)
+        var i = 0
+        while (i < dp.length) {
+            if (dp[i] == '*' || dp[i] == TERMINATOR_V1) { out.append(dp[i++]); continue }
+            if (i + 6 > dp.length || !dp.substring(i, i + 6).all { it in '0'..'9' }) break
+            val end = i + 6 + dp.substring(i + 3, i + 6).toInt()
+            if (end > dp.length) break
+            val value = fromBytes(dp.substring(i + 6, end))
+            out.append(dp, i, i + 3).append(lenField(value.length)).append(value)
+            i = end
+        }
+        return out.append(fromBytes(dp.substring(i))).toString()
+    }
+
+    private fun fromBytes(latin1: String): String = String(latin1.toByteArray(Charsets.ISO_8859_1), Charsets.UTF_8)
+
+    private fun lenField(n: Int): String = minOf(n, 999).toString().padStart(3, '0')
+
+    /**
      * Mask every card number in a raw TLV frame without changing its length, so
      * the TLV lengths stay valid: NCAR (007) values, DP (010) print-line texts and
      * any card number elsewhere in a value or in trailing bytes. Transports apply
@@ -533,13 +647,11 @@ object TlvProtocol {
         while (index + 6 <= frame.length) {
             val c = frame[index]
             if (c == TERMINATOR_V2 || c == TERMINATOR_V1) break
-            val lengthStr = frame.substring(index + 3, index + 6)
-            if (!lengthStr.all { it.isDigit() }) break
-            val length = lengthStr.toInt()
-            if (index + 6 + length > frame.length) break
+            val end = fieldEnd(frame, index)
+            if (end < 0 || end > frame.length) break
 
             val tag = frame.substring(index, index + 3)
-            val value = frame.substring(index + 6, index + 6 + length)
+            val value = frame.substring(index + 6, end)
             out.append(frame, index, index + 6)
             out.append(
                 when (tag) {
@@ -548,7 +660,7 @@ object TlvProtocol {
                     else -> maskCardNumbersInText(value)
                 }
             )
-            index += 6 + length
+            index = end
         }
         // Terminator, trailing bytes or an unparseable remainder
         out.append(maskCardNumbersInText(frame.substring(index)))
@@ -569,7 +681,8 @@ object TlvProtocol {
             if (index + 6 + length > dp.length) break
             val value = dp.substring(index + 6, index + 6 + length)
             out.append(dp, index, index + 6)
-            out.append(if (dp.startsWith(ReceiptTags.CONTENT, index)) maskCardNumbersInText(value) else value)
+            // Every sub-tag value, not only the text (033): a mis-framed field must never leak a card number.
+            out.append(maskCardNumbersInText(value))
             index += 6 + length
         }
         out.append(maskCardNumbersInText(dp.substring(index)))

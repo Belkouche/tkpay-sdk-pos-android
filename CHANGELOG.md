@@ -2,6 +2,56 @@
 
 All notable changes to the TKpay NAPS POS SDK (Android) are documented here.
 
+## [Unreleased] — Ingenico Lane3600
+
+Ported from the Node and C# SDKs, both verified on a live Lane3600 over USB (network test →
+1 MAD payment → immediate void). The void frames were also verified on a Sunmi P2 over TCP.
+
+- **USB serial: wait after opening the port.** The Lane3600 holds back every answer until about
+  30 s after the port opens. When a payment was the first frame, its TM 101 arrived after the
+  terminal had stopped waiting for TM 002 ("attente validation caisse", then timeout), and the
+  payment was not recorded. The first frame now waits until the port has been open 32 s.
+- **USB serial: back-to-back operations.** After a reply the Lane3600 keeps showing or printing
+  the result, and a request arriving then is lost (a void right after a payment got no reply; a
+  payment 0.5 s after a network test was refused with CR 100 without a card prompt). A request
+  that starts a new operation waits 3 s after the last reply; TM 002 / TM 004 wait 0.5 s.
+  Requests end with the protocol terminator ('!' v2, '?' v1).
+- **Reader (USB and TCP): end of reply on a field boundary.** A reply is complete when walking
+  its fields by length lands on a '!'/'?' terminator. The serial reader used to stop at the first
+  '!' or '?' anywhere, and the TCP reader whenever a read ended on one; receipt lines inside DP
+  end with '?', so a reply could be cut short. Non-TLV data (the Lane3600 writes 999 as the
+  length of a longer receipt) still ends on a trailing terminator.
+- **Long receipts.** The Lane3600 writes 999 as the DP length when the receipt is longer (a
+  duplicate holding both copies is ~2,150 chars). A DP declared 999 long now ends at its own '?'
+  end marker, found by walking its sub-tags; it used to be cut at 999 chars. Masking, parsing and
+  the reader's end-of-reply check share the same field walk (ASCII digits only).
+  A DP really 999 long (no '?') stops at its first non-receipt sub-tag (not 030–039), so it never
+  swallows the fields after it. Card numbers are masked in every DP sub-tag value, not only the
+  text (033).
+- **USB serial: accented text.** The Lane3600 counts field and DP sub-tag lengths in UTF-8 bytes.
+  Serial replies were decoded as US-ASCII (accents became '?'); they are now read byte for byte
+  and their lengths rewritten in characters before parsing, so accented text comes through.
+  TCP (Sunmi, whose lengths count characters) is unchanged.
+- **Docs:** on the Lane3600 only the last transaction can be reprinted; a duplicate by STAN
+  answers CR 381.
+- **USB serial defaults to protocol V2** (was V1). The Lane3600 ends every reply with '!' and was
+  only verified with '!'-terminated requests; a '?'-terminated request was never tested. Set
+  `ProtocolVersion.V1` explicitly for a legacy terminal.
+- **USB serial: one port for the life of the client.** `NapsPayClient` keeps the USB port open
+  between operations instead of reopening it each time; `close()` releases it. After a timeout
+  or error the port is closed, so a late reply is never read as the answer to the next request.
+  TCP still opens one connection per operation.
+- **Void frames follow spec v2 §4.3/§4.4.** TM 003 carries the mandatory NS (a new sequence for
+  the void) and sends the payment's `sequence` in NSA; without NS the Lane3600 refused it with
+  CR 307. TM 004 repeats that NS and echoes MT, DE, DATR and HETR from TM 103, in spec order.
+- **Void receipt.** When TM 103 carries no receipt, as on the Lane3600, the TM 104 receipt is
+  returned as `merchantReceipt` instead of `customerReceipt`.
+- **Network test is USB only.** Over TCP, `networkTest` sends nothing and returns
+  `responseCode = "UNSUPPORTED"`: the NapsPay app on a Sunmi P2 answers TM 009 with TM 101 /
+  CR 902 (it only handles payments and voids over the ECR link), and a test frame crashed the app.
+- **Timeouts.** `networkTest` and `resetPinPad` use `timeout` (default 120 s) instead of a fixed
+  10 s, which is too short for the Lane3600.
+
 ## [1.5.0] - 2026-11-09
 
 - **Removed the gateway notification.** `processPayment` no longer sends a background `POST` to

@@ -6,6 +6,7 @@ import ma.tkpay.naps.protocol.TlvProtocol
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import kotlinx.coroutines.runBlocking
@@ -119,6 +120,18 @@ class NapsPayClientTest {
         mapOf(TlvProtocol.Tags.TM to "104", TlvProtocol.Tags.CR to cr, TlvProtocol.Tags.STAN to "000456")
 
     @Test
+    fun cancellation_tm104ReceiptIsMerchantCopy_whenTm103HasNone() {
+        // Ingenico Lane3600: MT=103 has no DP; MT=104 carries the only void receipt.
+        val tm103 = cancelResponse - TlvProtocol.Tags.DP
+        val tm104 = confirm("000") + (TlvProtocol.Tags.DP to receipt("SIGNATURE CLIENT"))
+        val result = client.buildCancellationResult("000123", tm103, tm104)
+        assertTrue(result.success)
+        assertTrue(result.merchantReceipt!!.toPlainText().contains("SIGNATURE CLIENT"))
+        assertEquals(ReceiptType.MERCHANT, result.merchantReceipt?.type)
+        assertNull(result.customerReceipt)
+    }
+
+    @Test
     fun cancellation_keepsMerchantCopyFromTm103AndCustomerCopyFromTm104() {
         val tm104 = confirm("000") + (TlvProtocol.Tags.DP to receipt("COPIE CLIENT"))
         val result = client.buildCancellationResult("000123", cancelResponse, tm104)
@@ -168,6 +181,15 @@ class NapsPayClientTest {
     }
 
     @Test
+    fun networkTest_overTcp_sendsNothing_returnsUnsupported() = runBlocking {
+        // Sunmi NapsPay answers TM=009 with TM=101 / CR=902; a test frame crashed the app.
+        // Port 9 (discard) is never contacted: nothing must be sent over TCP.
+        val result = NapsPayClient(NapsConfig(host = "127.0.0.1", port = 9)).networkTest("01", "00001")
+        assertFalse(result.success)
+        assertEquals("UNSUPPORTED", result.responseCode)
+    }
+
+    @Test
     fun cancelPayment_terminalSilentAfterTm004FailsClosedAsPending() = runBlocking {
         val server = ServerSocket(0)
         val received = mutableListOf<String>()
@@ -198,9 +220,11 @@ class NapsPayClientTest {
         assertTrue(result.pending)
         assertEquals("000123", result.stan)
         assertNotNull(result.merchantReceipt)
+        val tm003 = TlvProtocol.parse(received[0])
+        assertEquals("000045", tm003[TlvProtocol.Tags.NSA])  // the payment's sequence
         val tm004 = TlvProtocol.parse(received[1])
         assertEquals("004", tm004[TlvProtocol.Tags.TM])
-        assertEquals("000045", tm004[TlvProtocol.Tags.NS])
+        assertEquals(tm003[TlvProtocol.Tags.NS], tm004[TlvProtocol.Tags.NS])  // spec §4.4: 004.NS = 003.NS
         assertEquals("000000001999", tm004[TlvProtocol.Tags.MT])
     }
 }

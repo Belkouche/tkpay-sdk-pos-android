@@ -251,22 +251,114 @@ class TlvProtocolTest {
         assertEquals(TlvProtocol.Currency.MAD, fields[TlvProtocol.Tags.DE])
     }
 
-    // --- Cancellation confirmation (TM=004), spec §4.4 ---
+    // --- Cancellation (TM=003 / TM=004), spec §4.3/§4.4 ---
 
     @Test
-    fun cancellationConfirmation_carriesSequenceInNsNotNsa() {
-        val cancel = TlvProtocol.parse(TlvProtocol.buildCancellationRequest("000123", "0100001", "000045", 1999L))
-        val confirm = TlvProtocol.parse(
-            TlvProtocol.buildCancellationConfirmation("000123", "0100001", "000045", "000000001999")
-        )
+    fun cancellationRequest_carriesNewNs_andPaymentSequenceInNsa() {
+        val tlv = TlvProtocol.buildCancellationRequest("000123", "0100001", "000099", 1999L, "000045")
+        val fields = TlvProtocol.parse(tlv)
 
-        assertEquals(TlvProtocol.MessageTypes.CANCELLATION_CONFIRMATION_REQUEST, confirm[TlvProtocol.Tags.TM])
-        assertEquals("000045", confirm[TlvProtocol.Tags.NS])
+        assertEquals(TlvProtocol.MessageTypes.CANCELLATION_REQUEST, fields[TlvProtocol.Tags.TM])
+        // NS is mandatory (spec §4.3); without it the Lane3600 answers CR 307
+        assertEquals("000099", fields[TlvProtocol.Tags.NS])
+        assertEquals("000045", fields[TlvProtocol.Tags.NSA])
+        assertEquals("1999", fields[TlvProtocol.Tags.MT])
+        assertEquals("000123", fields[TlvProtocol.Tags.STAN])
+        assertTrue(tlv.startsWith("001003003" + "0030070100001" + "004006000099" + "014008"))
+    }
+
+    @Test
+    fun cancellationConfirmation_specOrder_echoesTm103() {
+        val tlv = TlvProtocol.buildCancellationConfirmation(
+            "000123", "0100001", "000099", "000000001999", "504", "06112026", "101500"
+        )
+        // Spec v2 §4.4 order, accepted by the Lane3600 and the Sunmi P2 (TM 104 CR 000)
+        assertTrue(tlv.startsWith(
+            "001003004" + "0030070100001" + "004006000099" + "008006000123" +
+            "002012000000001999" + "012003504" + "01800806112026" + "019006101500" + "014008"
+        ))
+        val confirm = TlvProtocol.parse(tlv)
         assertFalse("NSA must not be sent in TM=004", confirm.containsKey(TlvProtocol.Tags.NSA))
-        // 004.NS = the sequence the TM=003 carried
-        assertEquals(cancel[TlvProtocol.Tags.NSA], confirm[TlvProtocol.Tags.NS])
-        // Amount echoed verbatim from MT=103
-        assertEquals("000000001999", confirm[TlvProtocol.Tags.MT])
-        assertEquals("000123", confirm[TlvProtocol.Tags.STAN])
+    }
+
+    @Test
+    fun isCompleteMessage_onlyAtTerminatorOnFieldBoundary() {
+        assertTrue(TlvProtocol.isCompleteMessage("001003109013003000!"))
+        assertFalse(TlvProtocol.isCompleteMessage("001003109013003000"))
+        assertFalse(TlvProtocol.isCompleteMessage("001003108010012LINE1?LINE2?"))   // '?' inside DP
+        assertTrue(TlvProtocol.isCompleteMessage("001003108010012LINE1?LINE2?013003000!"))
+        assertFalse(TlvProtocol.isCompleteMessage("001003108010014MERCI! A BIENT")) // '!' inside DP
+        assertFalse(TlvProtocol.isCompleteMessage("00100"))
+        assertTrue(TlvProtocol.isCompleteMessage("garbage!"))                        // non-TLV fallback
+        assertFalse(TlvProtocol.isCompleteMessage("garbage"))
+    }
+
+    @Test
+    fun isCompleteResponse_walksOnlyWhenDataEndsWithTerminator_andCapsSize() {
+        assertTrue(TlvProtocol.isCompleteResponse("001003109013003000!"))
+        assertFalse(TlvProtocol.isCompleteResponse("001003109013003000!0")) // closes on silence
+        try {
+            TlvProtocol.isCompleteResponse("0".repeat(TlvProtocol.MAX_RESPONSE_CHARS + 1))
+            org.junit.Assert.fail("expected NapsError")
+        } catch (e: ma.tkpay.naps.models.NapsError) { }
+    }
+
+    // A receipt longer than 999 chars, as the Lane3600 sends it: DP declared 999 long.
+    private val longDp = (0 until 25).joinToString("") { n ->
+        "*030002%02d031001S032001G033040%s".format(n, "X".repeat(40))
+    } + "?"
+    private val longFrame = "001003108" + "010999" + longDp + "013003000" + "!"
+
+    @Test
+    fun parse_dpDeclared999_readsWholeReceiptAndFollowingFields() {
+        val fields = TlvProtocol.parse(longFrame)
+        assertEquals(longDp, fields[TlvProtocol.Tags.DP])
+        assertEquals("000", fields[TlvProtocol.Tags.CR])
+    }
+
+    @Test
+    fun isCompleteMessage_dpDeclared999_waitsForWholeReceipt() {
+        assertFalse(TlvProtocol.isCompleteMessage(longFrame.substring(0, 1200)))
+        assertFalse(TlvProtocol.isCompleteMessage(longFrame.dropLast(1)))
+        assertTrue(TlvProtocol.isCompleteMessage(longFrame))
+    }
+
+    @Test
+    fun byteLengthsToCharLengths_rewritesFieldAndDpSubTagLengths() {
+        // "Copie Commerçé" is 14 chars but 16 UTF-8 bytes; the Lane3600 declares 016.
+        val dp = "*03000201033016Copie Commerçé*03000202033004NEXT?"
+        val dpBytes = dp.toByteArray(Charsets.UTF_8).size
+        val frame = "001003108010%03d%s013003000!".format(dpBytes, dp).toByteArray(Charsets.UTF_8)
+
+        val converted = TlvProtocol.byteLengthsToCharLengths(String(frame, Charsets.ISO_8859_1))
+        val fields = TlvProtocol.parse(converted)
+
+        assertEquals(dp.replace("033016", "033014"), fields[TlvProtocol.Tags.DP]) // length now in characters
+        assertEquals("000", fields[TlvProtocol.Tags.CR])
+        assertEquals(longFrame, TlvProtocol.byteLengthsToCharLengths(longFrame)) // ASCII unchanged
+    }
+
+    @Test
+    fun parse_dpReally999WithoutEndMarker_doesNotSwallowNextFields() {
+        val dp = StringBuilder()
+        var n = 0
+        while (999 - dp.length > 75) dp.append("*030002%02d031001S032001G033040%s".format(n++ % 100, "X".repeat(40)))
+        val rest = 999 - dp.length - 7
+        dp.append("*033%03d%s".format(rest, "X".repeat(rest))) // exactly 999 chars, no end marker
+
+        val fields = TlvProtocol.parse("001003108" + "010999" + dp + "013003000" + "0070165167940000003315" + "!")
+
+        assertEquals(dp.toString(), fields[TlvProtocol.Tags.DP])
+        assertEquals("000", fields[TlvProtocol.Tags.CR])
+        assertEquals("516794******3315", fields[TlvProtocol.Tags.NCAR])
+    }
+
+    @Test
+    fun parse_masksCardNumberInEveryDpSubTag() {
+        // A 16-digit number in a non-text sub-tag (031) must be masked too.
+        val dp = "*030002" + "01" + "031016" + "5167940000003315" + "033004" + "TEXT" + "?"
+        val masked = TlvProtocol.parse(TlvProtocol.buildField(TlvProtocol.Tags.DP, dp) + "!")[TlvProtocol.Tags.DP]!!
+        assertFalse(masked.contains("5167940000003315"))
+        assertTrue(masked.contains("516794******3315"))
     }
 }

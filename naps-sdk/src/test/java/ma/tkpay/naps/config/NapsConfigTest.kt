@@ -15,9 +15,10 @@ class NapsConfigTest {
     }
 
     @Test
-    fun usbSerialTransport_defaultsToV1() {
+    fun usbSerialTransport_defaultsToV2() {
+        // The Lane3600 over USB ends every reply with '!'.
         val config = NapsConfig(transport = TransportType.USB_SERIAL)
-        assertEquals(ProtocolVersion.V1, config.resolveProtocolVersion())
+        assertEquals(ProtocolVersion.V2, config.resolveProtocolVersion())
     }
 
     @Test
@@ -39,7 +40,7 @@ class NapsConfigTest {
     fun usbSerialFactory_buildsSerialTransportWithoutHost() {
         val config = NapsConfig.usbSerial()
         assertEquals(TransportType.USB_SERIAL, config.transport)
-        assertEquals(ProtocolVersion.V1, config.resolveProtocolVersion())
+        assertEquals(ProtocolVersion.V2, config.resolveProtocolVersion())
         assertEquals(NapsConfig.DEFAULT_BAUD_RATE, config.serialBaudRate)
     }
 
