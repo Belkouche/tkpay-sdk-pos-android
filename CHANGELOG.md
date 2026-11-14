@@ -2,11 +2,19 @@
 
 All notable changes to the TKpay NAPS POS SDK (Android) are documented here.
 
-## [Unreleased] — Ingenico Lane3600
+## [1.6.0] — Ingenico Lane3600
 
 Ported from the Node and C# SDKs, both verified on a live Lane3600 over USB (network test →
 1 MAD payment → immediate void). The void frames were also verified on a Sunmi P2 over TCP.
 
+- **`settlement()` no longer claims a telecollecte.** It sends nothing and returns
+  `success = false`, `responseCode = "UNSUPPORTED"`. The ECR protocol has no telecollecte message:
+  the spec (v2.0 §4.7) defines TM 010 as the totals ticket. On a live Sunmi P2 over USB, TM 010
+  sent with and without a sequence number returned CR 000 and the same "TOTAL" ticket, with the
+  totals unchanged, so nothing was settled; `settlement()` used to report it as accepted. Run the
+  telecollecte from the terminal menu and use `totals()` for the ticket. `settlement()`,
+  `buildSettlementRequest` and `SETTLEMENT_REQUEST` / `SETTLEMENT_RESPONSE` are deprecated.
+  Not checked on an Ingenico Lane3600.
 - **USB serial: wait after opening the port.** The Lane3600 holds back every answer until about
   30 s after the port opens. When a payment was the first frame, its TM 101 arrived after the
   terminal had stopped waiting for TM 002 ("attente validation caisse", then timeout), and the

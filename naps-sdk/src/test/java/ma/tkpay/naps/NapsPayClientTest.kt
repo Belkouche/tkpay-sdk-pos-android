@@ -190,6 +190,19 @@ class NapsPayClientTest {
     }
 
     @Test
+    @Suppress("DEPRECATION")
+    fun settlement_sendsNothing_returnsUnsupported() = runBlocking {
+        // TM 010 is the totals ticket (spec v2.0 §4.7); the protocol has no telecollecte message.
+        // Port 9 (discard) is never contacted: nothing must be sent.
+        val result = NapsPayClient(NapsConfig(host = "127.0.0.1", port = 9)).settlement("01", "00001")
+        assertFalse(result.success)
+        assertEquals("UNSUPPORTED", result.responseCode)
+        assertEquals("Telecollecte is not part of the NapsPay ECR protocol: run it from the terminal menu. Use totals() for the daily totals ticket.", result.error)
+        assertNull(result.date)
+        assertNull(result.time)
+    }
+
+    @Test
     fun cancelPayment_terminalSilentAfterTm004FailsClosedAsPending() = runBlocking {
         val server = ServerSocket(0)
         val received = mutableListOf<String>()

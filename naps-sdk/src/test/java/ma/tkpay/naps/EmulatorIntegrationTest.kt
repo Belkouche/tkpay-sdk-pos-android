@@ -124,9 +124,6 @@ class EmulatorIntegrationTest {
 
         val reset = client.resetPinPad("01", "00001")
         assertTrue(reset.error, reset.success)
-
-        val settlement = client.settlement("01", "00001")
-        assertTrue(settlement.error, settlement.success)
     }
 
     // --- decline paths ---

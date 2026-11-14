@@ -97,9 +97,6 @@ internal object ReadmeExamples {
         val totals = client.totals("01", "00001")
         totals.receipt?.let { printReceipt(it) }
 
-        val settlement = client.settlement("01", "00001")
-        println(if (settlement.success) "Settled ${settlement.date} ${settlement.time}" else "Settlement failed: ${settlement.error}")
-
         val reset = client.resetPinPad("01", "00001")
         println(if (reset.success) "PIN pad reset" else "Reset failed: ${reset.error}")
     }

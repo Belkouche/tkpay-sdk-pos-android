@@ -298,39 +298,17 @@ class NapsPayClient(
     }
 
     /**
-     * Force end-of-day settlement (telecollecte) — TM=010
-     *
-     * Sends batch totals to the NAPS server. The terminal must be idle
-     * ("Attente Caisse") and referencing must have run at least once.
-     *
-     * @param registerId Register ID (2 digits, e.g., "01")
-     * @param cashierId Cashier ID (5 digits, e.g., "00001")
-     * @return SettlementResult with response code
+     * Sends nothing and returns `responseCode = "UNSUPPORTED"`. The ECR protocol has no
+     * telecollecte message: TM 010 is the totals ticket (spec v2.0 §4.7), and a live Sunmi P2
+     * answered it with the same totals before and after, so nothing was settled.
      */
-    suspend fun settlement(registerId: String, cashierId: String): SettlementResult = withContext(Dispatchers.IO) {
-        val ncai = registerId + cashierId
-        val connection = newTransport()
-
-        try {
-            connection.connect()
-            val tlvRequest = TlvProtocol.buildSettlementRequest(ncai)
-            val tlvResponse = connection.sendAndReceive(tlvRequest, timeout = config.timeout)
-            val fields = TlvProtocol.parse(tlvResponse)
-
-            val responseCode = fields[TlvProtocol.Tags.CR] ?: ""
-            SettlementResult(
-                success = responseCode == "000",
-                responseCode = responseCode,
-                date = fields[TlvProtocol.Tags.DA],
-                time = fields[TlvProtocol.Tags.HE],
-                error = if (responseCode != "000") "Settlement failed with code: $responseCode" else null
-            )
-        } catch (e: Exception) {
-            SettlementResult(success = false, responseCode = "", error = e.message)
-        } finally {
-            connection.disconnect()
-        }
-    }
+    @Deprecated(
+        "Run the telecollecte from the terminal menu; use totals() for the totals ticket.",
+        ReplaceWith("totals(registerId, cashierId)")
+    )
+    @Suppress("UNUSED_PARAMETER", "RedundantSuspendModifier")
+    suspend fun settlement(registerId: String, cashierId: String): SettlementResult =
+        SettlementResult(success = false, responseCode = "UNSUPPORTED", error = "Telecollecte is not part of the NapsPay ECR protocol: run it from the terminal menu. Use totals() for the daily totals ticket.")
 
     /**
      * Test connection to terminal (TCP-level only)
@@ -665,8 +643,8 @@ class NapsPayClient(
     /**
      * Request the terminal's running batch totals report (TM=010)
      *
-     * Unlike [settlement], this is the management-form frame (with NS) and
-     * returns the totals receipt printed by the terminal.
+     * Returns the totals receipt printed by the terminal (spec v2.0 §4.7). It does not
+     * settle: the ECR protocol has no telecollecte message.
      *
      * @param registerId Register ID (2 digits)
      * @param cashierId Cashier ID (5 digits)

@@ -68,9 +68,11 @@ object TlvProtocol {
         const val DUPLICATE_RESPONSE = "108"
         const val NETWORK_TEST_REQUEST = "009"
         const val NETWORK_TEST_RESPONSE = "109"
+        @Deprecated("TM 010 is the totals request; the protocol has no telecollecte message", ReplaceWith("TOTALS_REQUEST"))
         const val SETTLEMENT_REQUEST = "010"
+        @Deprecated("TM 110 is the totals response; the protocol has no telecollecte message")
         const val SETTLEMENT_RESPONSE = "110"
-        const val TOTALS_REQUEST = "010"      // Totals report (shares TM with settlement)
+        const val TOTALS_REQUEST = "010"      // Payment Totals (spec v2.0 §4.7)
         const val TOTALS_RESPONSE = "110"
         const val RESET_REQUEST = "012"
         const val RESET_RESPONSE = "112"
@@ -388,8 +390,10 @@ object TlvProtocol {
         buildManagementRequest(MessageTypes.REFERENCING_REQUEST, ncai, sequence, listOf(Tags.TIDE to tide))
 
     /**
-     * Build settlement request TLV (TM=010 — telecollecte)
+     * TM 010 + NCAI + DA + HE, no sequence number.
      */
+    @Deprecated("TM 010 asks for the totals ticket, it does not settle (spec v2.0 §4.7)", ReplaceWith("buildTotalsRequest(ncai, sequence)"))
+    @Suppress("DEPRECATION")
     fun buildSettlementRequest(ncai: String): String {
         val dateTime = getCurrentDateTime()
 
