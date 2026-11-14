@@ -158,15 +158,13 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // ── Settlement (TM=010) ───────────────────────────────────────────────
+    // ── Settlement: not in the ECR protocol ──────────────────────────────
 
+    @Suppress("DEPRECATION")
     private fun settlement() {
-        withClient("Running settlement (TM=010)…") { client ->
+        withClient("Settlement…") { client ->
             val result = client.settlement("01", "00001")
-            if (result.success)
-                "✅ Settlement OK — ${result.date} ${result.time}"
-            else
-                "❌ Settlement failed [${result.responseCode}]: ${result.error}"
+            "❌ Settlement [${result.responseCode}]: ${result.error}"
         }
     }
 

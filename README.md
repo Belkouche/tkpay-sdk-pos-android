@@ -1,7 +1,7 @@
 # TKpay NAPS POS SDK — Android (Kotlin)
 
 Kotlin library that lets an Android point-of-sale app drive a NAPS Pay payment terminal:
-take a card payment, void it, reprint receipts, run end-of-day settlement and maintenance
+take a card payment, void it, reprint receipts, print the daily totals and run maintenance
 commands. It speaks the NAPS Pay ECR TLV protocol (spec v2.0, NapsPay v5.4.4) and turns the
 terminal's replies into plain Kotlin results.
 
@@ -333,12 +333,10 @@ val totals = client.totals("01", "00001")
 totals.receipt?.let { printReceipt(it) }
 ```
 
-**Settlement (TM 010)** — end-of-day batch transfer. The terminal must be idle.
-
-```kotlin
-val settlement = client.settlement("01", "00001")
-println(if (settlement.success) "Settled ${settlement.date} ${settlement.time}" else "Settlement failed: ${settlement.error}")
-```
+**Telecollecte** — not part of the ECR protocol: run it from the terminal menu. The spec (v2.0
+§4.7) defines TM 010 as the totals ticket, and a live Sunmi P2 answered TM 010 with the same totals
+before and after, so nothing was settled. `settlement()` is deprecated: it sends nothing and
+returns `responseCode = "UNSUPPORTED"`. Use `totals()` for the ticket.
 
 **Reset PIN pad (TM 012)**:
 
@@ -354,7 +352,7 @@ println(if (reset.success) "PIN pad reset" else "Reset failed: ${reset.error}")
 | `printDuplicate(registerId, cashierId, stan?)` | 008 | `DuplicateReceiptResult` |
 | `networkTest(registerId, cashierId)` | 009 | `NetworkTestResult` |
 | `totals(registerId, cashierId)` | 010 | `TotalsResult` |
-| `settlement(registerId, cashierId)` | 010 | `SettlementResult` |
+| `settlement(registerId, cashierId)` (deprecated) | — | `SettlementResult`, always `"UNSUPPORTED"` |
 | `resetPinPad(registerId, cashierId)` | 012 | `ResetResult` |
 | `referencing(registerId, cashierId, tide = "01")` | 013 | `ReferencingResult` |
 | `testConnection()` | — | `Boolean` |

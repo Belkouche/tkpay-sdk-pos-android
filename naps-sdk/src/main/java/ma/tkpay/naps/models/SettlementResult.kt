@@ -1,13 +1,8 @@
 package ma.tkpay.naps.models
 
 /**
- * Settlement result for TM=010 (telecollecte)
- *
- * @property success Whether settlement was accepted by NAPS server
- * @property responseCode NAPS Pay response code ("000" = success)
- * @property date Settlement date (DDMMYYYY)
- * @property time Settlement time (HHMMSS)
- * @property error Error message if settlement failed
+ * Result of the deprecated [ma.tkpay.naps.NapsPayClient.settlement]: always `"UNSUPPORTED"`,
+ * as the ECR protocol has no telecollecte message.
  */
 data class SettlementResult(
     val success: Boolean,
